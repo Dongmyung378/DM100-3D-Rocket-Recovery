@@ -112,7 +112,10 @@ def main() -> None:
         slug = f"{username}/dm100-3d-{args.suite}-shard-{idx}-{args.shards}"
         s_out = args.out_dir / f"shard_{idx}"
         s_out.mkdir(parents=True, exist_ok=True)
-        subprocess.run([kaggle_exe, "kernels", "output", slug, "-p", str(s_out)], check=True)
+        subprocess.run(
+            [kaggle_exe, "kernels", "output", slug, "-p", str(s_out), "--force"],
+            check=True,
+        )
         shard_jsons.extend(sorted(s_out.rglob("results_*.json")))
         for rep in s_out.rglob("*_50hz.json"):
             shutil.copy2(rep, args.replays_dir / rep.name)

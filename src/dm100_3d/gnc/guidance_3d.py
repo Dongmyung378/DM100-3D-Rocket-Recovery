@@ -1532,21 +1532,12 @@ class RtlsController3D:
 
             if self.phase == "coast":
                 q_des = pointing_dir_to_quat_wxyz(self._retro_dir(self._air_vel(est), 260.0))
-                q_ce = quat_multiply_wxyz(quat_conjugate_wxyz(est.quat_wxyz), q_des)
-                c_err_deg = degrees(
-                    2.0 * atan2(float(np.linalg.norm(q_ce[1:4])), abs(float(q_ce[0])))
-                )
-                coast_db = (
-                    2_500.0
-                    if (q_pa < 100.0 and c_err_deg < 1.5)
-                    else (150.0 if q_pa < 100.0 else 0.0)
-                )
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
                     0.0,
                     allow_fin=deploy_fins,
-                    rcs_deadband_nm=coast_db,
+                    rcs_deadband_nm=150.0 if q_pa < 100.0 else 0.0,
                 )
                 cmd = ActuatorCommand3D(
                     gimbal_rad=gim,
@@ -1599,10 +1590,12 @@ class RtlsController3D:
                     self.cached_iip_xy_m = (xi, yi)
                     self.last_iip_time_s = est.time_s
 
+                eb_el = est.time_s - (self.entry_burn_started_s or est.time_s)
+                eb_ramp = _smoothstep(eb_el / 0.85)
                 eb_lim = 9.0 if q_pa < 14_000.0 else (6.0 if q_pa < 24_000.0 else 3.5)
                 q_taper = _smoothstep((pq - s.entry_q_cutoff_pa) / 6_500.0)
                 err_xy = np.array([self.cached_iip_xy_m[0] + 150.0, self.cached_iip_xy_m[1]])
-                raw_st = np.clip(-0.040 * err_xy, -eb_lim, eb_lim) * q_taper
+                raw_st = np.clip(-0.040 * err_xy, -eb_lim, eb_lim) * q_taper * eb_ramp
                 self._eb_steer_xy_deg += (1.0 - exp(-s.control_dt_s / 0.45)) * (
                     raw_st - self._eb_steer_xy_deg
                 )
@@ -1639,8 +1632,6 @@ class RtlsController3D:
                 if q_pa > 12_000.0 and raw_thr < lo3:
                     self.entry_single_engine = True
                 eb_eng = 1 if self.entry_single_engine else 3
-                eb_el = est.time_s - (self.entry_burn_started_s or est.time_s)
-                eb_ramp = _smoothstep(eb_el / 0.85)
                 lo_eb = self.vehicle.propulsion.throttle_bounds(eb_eng)[0]
                 throttle = self.vehicle.propulsion.quantize_throttle(
                     lo_eb + eb_ramp * max(0.0, raw_thr - lo_eb), eb_eng

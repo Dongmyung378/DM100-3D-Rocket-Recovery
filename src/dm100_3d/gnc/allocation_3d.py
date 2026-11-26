@@ -264,11 +264,15 @@ class PriorityControlAllocator3D:
                 prop.rcs_roll_torque_limit_nm,
             )
             # Enforce 3D vector norm ||(bg + fin + eff_tvc + rcs) / I||_2 <= guard_rad_s2
+            # Use inertia-scaled continuous soft-deadband so low-inertia roll (Izz << Ixx)
+            # never experiences step discontinuities or zero-g bang-bang slosh pumping.
             axis_guard = guard_rad_s2 / sqrt(3.0)
+            i_ref = max(float(i_vec[0]), 1.0)
             for ax_i in range(3):
                 val = float(res_after_tvc[ax_i])
-                if abs(val) <= inp.rcs_deadband_nm:
-                    val = 0.0
+                db_i = inp.rcs_deadband_nm * min(1.0, float(i_vec[ax_i]) / i_ref)
+                if db_i > 0.0:
+                    val = 0.0 if abs(val) <= db_i else (val - db_i if val > 0.0 else val + db_i)
                 g_tau_i = inp.inertia_diag_kg_m2[ax_i] * guard_rad_s2
                 sup = float(fin_tau[ax_i] + eff_tvc[ax_i])
                 lo = max(-lims[ax_i], -g_tau_i - float(bg[ax_i]) - sup)
