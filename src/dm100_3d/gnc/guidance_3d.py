@@ -60,6 +60,7 @@ from dm100_3d.physics import (
     compute_fins_aero_3d,
     compute_stagnation_heat_flux_w_m2,
     ground_effect_nominal_lift_n,
+    srp_nominal_cp_shift_m,
     srp_nominal_drag_multiplier,
     wgs84_coriolis_and_transport_enu,
     wgs84_normal_gravity,
@@ -684,6 +685,42 @@ class RtlsController3D:
         r_wb = quat_to_rotmat(q_est)
         om_b = np.asarray(est.omega_body_rad_s, dtype=np.float64)
 
+        t_k_a, p_pa_a, rho_a = self.forecast_atmo.at(est.pos_enu_m[2])
+        cur_t, _ = compute_engine_thrust_3d(est.engine_throttle, p_pa_a, self.vehicle)
+        cmd_t, _ = compute_engine_thrust_3d(throttle_cmd, p_pa_a, self.vehicle)
+        fut_t = cmd_t + (cur_t - cmd_t) * exp(
+            -s.control_dt_s / self.vehicle.propulsion.nominal_engine_tau_s
+        )
+        srp_drag_mult = 1.0
+        srp_cp_shift = 0.0
+        if self.gnc_v2.use_srp_iip_feedforward and (not est.upper_attached):
+            t_srp_mid = 0.5 * (cur_t + fut_t)
+            if t_srp_mid > 1.0:
+                v_air_s = self._air_vel(est)
+                spd_s = float(np.linalg.norm(v_air_s))
+                if spd_s > 1.0:
+                    q_s = 0.5 * rho_a * spd_s * spd_s
+                    mach_s = spd_s / sqrt(1.4 * R_AIR * t_k_a)
+                    vz_b_s = float((r_wb.T @ v_air_s)[2])
+                    r_body = self.vehicle.geometry.body_radius_m
+                    srp_drag_mult = srp_nominal_drag_multiplier(
+                        mach=mach_s,
+                        v_air_zb_m_s=vz_b_s,
+                        thrust_n=t_srp_mid,
+                        dynamic_pressure_pa=q_s,
+                        body_radius_m=r_body,
+                        eta_nom=self.gnc_v2.srp_nominal_eta,
+                        upper_attached=False,
+                    )
+                    srp_cp_shift = srp_nominal_cp_shift_m(
+                        mach=mach_s,
+                        v_air_zb_m_s=vz_b_s,
+                        thrust_n=t_srp_mid,
+                        dynamic_pressure_pa=q_s,
+                        body_radius_m=r_body,
+                        upper_attached=False,
+                    )
+
         _, btau_b, q_pa, _, _, _, _ = compute_body_aero_3d(
             altitude_m=est.pos_enu_m[2],
             vel_enu_m_s=est.vel_enu_m_s,
@@ -695,6 +732,8 @@ class RtlsController3D:
             time_s=est.time_s,
             vehicle=self.vehicle,
             upper_attached=est.upper_attached,
+            axial_drag_multiplier=srp_drag_mult,
+            cp_shift_m=srp_cp_shift,
         )
 
         # Decoupled 2-axis pointing error (body X/Y) + direct geometric zero-roll error (body Z)
@@ -742,12 +781,6 @@ class RtlsController3D:
         req_tau = i_vec * des_alpha + gyro_ff - btau_b - tb
         bg_tau = btau_b - gyro_ff + tb
 
-        _, p_pa, _ = self.forecast_atmo.at(est.pos_enu_m[2])
-        cur_t, _ = compute_engine_thrust_3d(est.engine_throttle, p_pa, self.vehicle)
-        cmd_t, _ = compute_engine_thrust_3d(throttle_cmd, p_pa, self.vehicle)
-        fut_t = cmd_t + (cur_t - cmd_t) * exp(
-            -s.control_dt_s / self.vehicle.propulsion.nominal_engine_tau_s
-        )
         if throttle_cmd <= 1e-3 or (est.engine_throttle < 1e-3 and throttle_cmd > 0.0):
             sizing_t = 0.0
         else:
@@ -1300,7 +1333,15 @@ class RtlsController3D:
                 mid_nrm = float(np.linalg.norm(th_vb_mid))
                 if mid_nrm > radians(2.40) and mid_nrm > 1e-12:
                     th_vb_mid *= radians(2.40) / mid_nrm
-                vb_dir_xy = self._vb_wind_trim_xy + th_vb_mid
+                # In v2 dual-tank configuration, the higher LOX-dominant CG (~9.1 m vs 7.3 m)
+                # increases post-touchdown 4-leg rocking inertia; taper upwind body lean smoothly
+                # to vertical before touchdown while TVC+RCS holds lateral pad position.
+                wt_taper = (
+                    _smoothstep((h_vref - 2.5) / 6.5)
+                    if self.gnc_v2.use_dual_tank_mass_props
+                    else 1.0
+                )
+                vb_dir_xy = self._vb_wind_trim_xy * wt_taper + th_vb_mid
                 vb_nrm = float(np.linalg.norm(vb_dir_xy))
                 if vb_nrm > radians(2.55) and vb_nrm > 1e-12:
                     vb_dir_xy *= radians(2.55) / vb_nrm

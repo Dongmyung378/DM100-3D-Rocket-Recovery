@@ -78,6 +78,7 @@ from dm100_3d.physics.srp_3d import (
     SrpBuffetFilter,
     compute_srp_effects,
     srp_gating_weight,
+    srp_nominal_cp_shift_m,
     srp_nominal_drag_multiplier,
 )
 
@@ -139,6 +140,7 @@ __all__ = [
     "slosh_3d_response",
     "slosh_body_offset_3d",
     "srp_gating_weight",
+    "srp_nominal_cp_shift_m",
     "srp_nominal_drag_multiplier",
     "standard_atmosphere",
     "wgs84_coriolis_and_transport_enu",

@@ -20,6 +20,7 @@ from dm100_3d.config import (
 )
 from dm100_3d.coords import axis_angle_to_quat_wxyz, quat_to_rotmat
 from dm100_3d.gnc.guidance_3d import RtlsController3D
+from dm100_3d.interfaces import ActuatorCommand3D
 from dm100_3d.physics import (
     DualTankSloshSettings,
     DualTankSloshState,
@@ -37,6 +38,7 @@ from dm100_3d.physics import (
     ground_effect_nominal_lift_n,
     initial_feed_state,
     regularized_ring_baffle_damping,
+    srp_nominal_cp_shift_m,
     srp_nominal_drag_multiplier,
     wgs84_coriolis_and_transport_enu,
     wgs84_normal_gravity,
@@ -303,6 +305,64 @@ def test_dual_tank_slosh_baffle_smoothness_and_free_decay() -> None:
     assert abs(resp_land.lox_freq_hz - resp_land.ch4_freq_hz) > 0.03
 
 
+def test_standing_pad_contact_includes_1g_proper_accel_for_dual_tank_slosh() -> None:
+    """Standing engine-off booster in v2 must feel +1 g pad reaction in proper accel (not 0 g)."""
+    cfg = DM100VehicleConfig()
+    scen = Scenario3D(name="standing_slosh_1g", seed=101)
+    scfg = SimConfig3D(
+        record_replay=False,
+        seed=101,
+        sensor_seed=1101,
+        physics_v2=PhysicsV2Config.m1_preset(),
+        gnc_v2=GncV2Config.m1_preset(),
+    )
+    plant = MuJoCoPlant3D(vehicle=cfg, scenario=scen, sim_config=scfg)
+    # Place unpowered booster gently resting on deployed legs with residual propellant & slosh
+    plant.on_pad = False
+    plant.upper_attached = False
+    plant.main_prop_kg = 2_400.0
+    plant.rcs_prop_kg = 150.0
+    plant.gear_extension = 1.0
+    plant.fin_extension = 1.0
+    mp = plant.body.update_mass_properties(
+        plant._total_mass(),
+        1.0,
+        upper_attached=False,
+        dual_tank=True,
+        rcs_propellant_kg=plant.rcs_prop_kg,
+        struts_active=True,
+    )
+    foot_z = cfg.landing_gear.foot_station_m
+    p_com0 = np.array([0.0, 0.0, mp.cg_station_m - foot_z + 0.02], dtype=np.float64)
+    plant.body.set_pose_from_com(p_com0, (0.0, 0.0, -0.2), (1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    plant.dual_slosh_state = DualTankSloshState(
+        lox=Slosh3DState(qx_m=0.15, qy_m=-0.10, qxd_m_s=0.25),
+        ch4=Slosh3DState(qx_m=-0.12, qy_m=0.10, qyd_m_s=-0.20),
+    )
+    cmd_off = ActuatorCommand3D(
+        throttle_cmd=0.0,
+        active_engines=0,
+        deploy_fins=True,
+        deploy_gear=True,
+        phase="touchdown_settle",
+    )
+    for _ in range(150):  # 3.0 s resting on the pad
+        plant.step(cmd_off, scfg.control_dt_s)
+        if plant.done:
+            break
+    assert plant.touchdown_time_s is not None
+    # True +1 g normal reaction must be visible in axial proper acceleration (not ~0 m/s^2)
+    assert 8.0 <= float(plant._last_accel_body[2]) <= 11.8
+    # Multi-ring baffles under +1 g must strongly damp the initial 0.27 m slosh oscillation
+    amp_end = (
+        abs(plant.dual_slosh_state.lox.qx_m)
+        + abs(plant.dual_slosh_state.lox.qy_m)
+        + abs(plant.dual_slosh_state.ch4.qx_m)
+        + abs(plant.dual_slosh_state.ch4.qy_m)
+    )
+    assert amp_end < 0.25
+
+
 # ---------------------------------------------------------------------------
 # 4. Supersonic Retropropulsion (SRP) & Landing Ground Effect
 # ---------------------------------------------------------------------------
@@ -360,7 +420,7 @@ def test_srp_c1_continuity_shielding_and_buffeting_bounds() -> None:
     assert -1.4 <= eff1.delta_z_cp_m <= -0.8
     assert max(abs(eff1.buffet_torque_body_nm[0]), abs(eff1.buffet_torque_body_nm[1])) < 15_000.0
 
-    # Causal nominal predictor helper stays inside (0.55, 1.0)
+    # Causal nominal predictor helpers stay bounded and track SRP drag & CP shift
     nom_mult = srp_nominal_drag_multiplier(
         mach=3.0,
         v_air_zb_m_s=-900.0,
@@ -369,6 +429,24 @@ def test_srp_c1_continuity_shielding_and_buffeting_bounds() -> None:
         body_radius_m=cfg.geometry.body_radius_m,
     )
     assert 0.60 <= nom_mult <= 0.90
+    nom_cp = srp_nominal_cp_shift_m(
+        mach=3.0,
+        v_air_zb_m_s=-900.0,
+        thrust_n=650_000.0,
+        dynamic_pressure_pa=20_000.0,
+        body_radius_m=cfg.geometry.body_radius_m,
+    )
+    assert -1.40 <= nom_cp <= -0.80
+    assert (
+        srp_nominal_cp_shift_m(
+            mach=3.0,
+            v_air_zb_m_s=-900.0,
+            thrust_n=0.0,
+            dynamic_pressure_pa=20_000.0,
+            body_radius_m=cfg.geometry.body_radius_m,
+        )
+        == 0.0
+    )
 
 
 def test_ground_effect_liftoff_block_taper_and_tilt_perturbation() -> None:

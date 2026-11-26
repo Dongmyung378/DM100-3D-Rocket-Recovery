@@ -833,7 +833,19 @@ class MuJoCoPlant3D:
                     self.peak_ground_effect_n = max(self.peak_ground_effect_n, ge.cushion_force_n)
 
             # Slosh response (v2 dual-tank 3x3 coupled vs legacy v1 single-tank)
-            a_proper_b = r_wb.T @ (f_w_ext / max(tot_m, 1.0))
+            # In v2, include the MuJoCo ground normal/friction reaction force in proper
+            # acceleration while in contact so resting/standing tanks experience true +1 g
+            # restoring & multi-ring baffle damping instead of fake zero-g on the pad.
+            f_proper_w = f_w_ext
+            if (
+                (pv2.dual_tank_slosh or pv2.sensors_v2)
+                and in_contact_zone
+                and self._last_contact.any_contact
+            ):
+                f_proper_w = f_w_ext + np.asarray(
+                    self._last_contact.force_world_n, dtype=np.float64
+                )
+            a_proper_b = r_wb.T @ (f_proper_w / max(tot_m, 1.0))
             self._last_accel_body = a_proper_b
             if pv2.dual_tank_slosh:
                 dsl = dual_slosh_3d_response(

@@ -11,12 +11,18 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from math import exp, radians
+from math import exp, radians, sqrt
 
 import numpy as np
 from numpy.typing import NDArray
 
-from dm100_3d.config import DM100VehicleConfig, GncV2Config, MassProperties3D, mass_properties_3d
+from dm100_3d.config import (
+    R_AIR,
+    DM100VehicleConfig,
+    GncV2Config,
+    MassProperties3D,
+    mass_properties_3d,
+)
 from dm100_3d.coords import (
     axis_angle_to_quat_wxyz,
     normalize_quat_wxyz,
@@ -29,7 +35,10 @@ from dm100_3d.physics import (
     AtmosphereLUT,
     Wind3DLUT,
     compute_coriolis_and_centrifugal_3d,
+    compute_engine_thrust_3d,
     compute_forces_and_torques_3d,
+    srp_nominal_cp_shift_m,
+    srp_nominal_drag_multiplier,
     wgs84_coriolis_and_transport_enu,
     wgs84_normal_gravity,
 )
@@ -172,18 +181,72 @@ class CausalEstimator3D:
             mass, gear_ext, vehicle=self.vehicle, upper_attached=upper_attached
         )
 
+    def _nominal_srp_terms(
+        self,
+        altitude_m: float,
+        vel_enu_m_s: NDArray[np.float64],
+        q_wxyz: NDArray[np.float64],
+        throttle: float,
+        upper_attached: bool,
+        time_s: float,
+    ) -> tuple[float, float]:
+        """Causal nominal SRP (drag_multiplier, cp_shift_m) for MEKF propagation & torque bias."""
+        if (not self.gnc_v2.use_srp_iip_feedforward) or upper_attached or throttle <= 1e-6:
+            return 1.0, 0.0
+        t_k, p_pa, rho = self.forecast_atmo.at(altitude_m)
+        wx, wy, wz = self.forecast_wind.at(altitude_m, time_s)
+        v_rel = np.array(
+            [float(vel_enu_m_s[0]) - wx, float(vel_enu_m_s[1]) - wy, float(vel_enu_m_s[2]) - wz],
+            dtype=np.float64,
+        )
+        spd = float(np.linalg.norm(v_rel))
+        if spd <= 1.0:
+            return 1.0, 0.0
+        q_pa = 0.5 * rho * spd * spd
+        mach = spd / sqrt(1.4 * R_AIR * t_k)
+        vz_b = float((quat_to_rotmat(q_wxyz).T @ v_rel)[2])
+        t_nom, _ = compute_engine_thrust_3d(throttle, p_pa, self.vehicle)
+        r_body = self.vehicle.geometry.body_radius_m
+        drag_mult = srp_nominal_drag_multiplier(
+            mach=mach,
+            v_air_zb_m_s=vz_b,
+            thrust_n=t_nom,
+            dynamic_pressure_pa=q_pa,
+            body_radius_m=r_body,
+            eta_nom=self.gnc_v2.srp_nominal_eta,
+            upper_attached=False,
+        )
+        cp_shift = srp_nominal_cp_shift_m(
+            mach=mach,
+            v_air_zb_m_s=vz_b,
+            thrust_n=t_nom,
+            dynamic_pressure_pa=q_pa,
+            body_radius_m=r_body,
+            upper_attached=False,
+        )
+        return drag_mult, cp_shift
+
     def _nominal_world_accel(
         self, pkt: TelemetryPacket3D, q_wxyz: NDArray[np.float64], omega_b: NDArray[np.float64]
     ) -> NDArray[np.float64]:
         mass = self._nominal_mass(pkt)
         mp = self._mass_props(mass, pkt.gear_extension, pkt.upper_attached, pkt.rcs_propellant_kg)
+        thr_cl = max(0.0, min(1.0, pkt.engine_throttle))
+        srp_drag_mult, srp_cp_shift = self._nominal_srp_terms(
+            float(self.p[2]),
+            self.v,
+            q_wxyz,
+            thr_cl,
+            pkt.upper_attached,
+            pkt.measurement_time_s,
+        )
         ft = compute_forces_and_torques_3d(
             altitude_m=float(self.p[2]),
             vel_enu_m_s=self.v,
             quat_wxyz=q_wxyz,
             omega_body_rad_s=omega_b,
             cg_station_m=mp.cg_station_m,
-            throttle_actual=max(0.0, min(1.0, pkt.engine_throttle)),
+            throttle_actual=thr_cl,
             gimbal_rad=pkt.gimbal_rad,
             rcs_torque_body_nm=(0.0, 0.0, 0.0),
             fin_deflection_rad=pkt.fin_deflection_rad,
@@ -193,6 +256,8 @@ class CausalEstimator3D:
             time_s=pkt.measurement_time_s,
             vehicle=self.vehicle,
             upper_attached=pkt.upper_attached,
+            axial_drag_multiplier=srp_drag_mult,
+            cp_shift_m=srp_cp_shift,
         )
         if self.gnc_v2.use_wgs84_gravity:
             g_loc = wgs84_normal_gravity(self.latitude_deg, float(self.p[2]))
@@ -431,6 +496,10 @@ class CausalEstimator3D:
         fin_mid = tuple(0.5 * (prev[8][k] + cur[8][k]) for k in range(4))
         fext_mid = 0.5 * (prev[9] + cur[9])
 
+        t_mid = 0.5 * (prev[0] + pkt.measurement_time_s)
+        srp_drag_mid, srp_cp_mid = self._nominal_srp_terms(
+            float(p_mid[2]), v_mid, q_mid, thr_mid, False, t_mid
+        )
         ft = compute_forces_and_torques_3d(
             altitude_m=float(p_mid[2]),
             vel_enu_m_s=v_mid,
@@ -444,9 +513,11 @@ class CausalEstimator3D:
             fin_extension=fext_mid,
             atmo_lut=self.forecast_atmo,
             wind_lut=self.forecast_wind,
-            time_s=0.5 * (prev[0] + pkt.measurement_time_s),
+            time_s=t_mid,
             vehicle=self.vehicle,
             upper_attached=False,
+            axial_drag_multiplier=srp_drag_mid,
+            cp_shift_m=srp_cp_mid,
         )
         # 3-axis causal disturbance torque observer (mirrors DM100 2D estimator.py):
         #   - X/Y pitch/yaw: rejects unmodeled wind-error & gust aero moments (tau = 0.18 s)

@@ -137,6 +137,28 @@ def srp_nominal_drag_multiplier(
     return max(0.15, min(1.0, mult))
 
 
+def srp_nominal_cp_shift_m(
+    *,
+    mach: float,
+    v_air_zb_m_s: float,
+    thrust_n: float,
+    dynamic_pressure_pa: float,
+    body_radius_m: float,
+    max_cp_shift_m: float = -1.4,
+    ct_cp_knee: float = 2.0,
+    upper_attached: bool = False,
+) -> float:
+    """Strictly causal nominal SRP center-of-pressure shift [m] for GNC/MEKF."""
+    if upper_attached or thrust_n <= 1.0 or dynamic_pressure_pa <= 1.0:
+        return 0.0
+    w = srp_gating_weight(mach, v_air_zb_m_s, thrust_n, upper_attached=upper_attached)
+    if w <= 1e-9:
+        return 0.0
+    s_ref = pi * body_radius_m * body_radius_m
+    c_t = thrust_n / max(dynamic_pressure_pa * s_ref, 1.0)
+    return float(max_cp_shift_m) * w * (c_t / (c_t + float(ct_cp_knee)))
+
+
 def compute_srp_effects(
     *,
     mach: float,
