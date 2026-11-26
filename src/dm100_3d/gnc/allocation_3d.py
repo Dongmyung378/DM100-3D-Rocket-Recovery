@@ -41,6 +41,10 @@ class Allocation3DInput:
     control_dt_s: float = 0.02
     angular_accel_guard_deg_s2: float = 3.8
     rcs_deadband_nm: float = 0.0
+    # Optional exact operating-point linearization of compute_fins_aero_3d (includes fin drag
+    # weathercock torque and cos(alpha) lift projection; matches DM100 2D guidance.py)
+    fin_zero_torque_body_nm: tuple[float, float, float] | None = None
+    fin_axis_eff_nm_per_rad: tuple[float, float, float] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +100,21 @@ class PriorityControlAllocator3D:
         # Fin 1 (-X, +Y lift): tau_x = -az*L, tau_z = -rc*L
         # Fin 2 (+Y, +X lift): tau_y = +az*L, tau_z = -rc*L
         # Fin 3 (-Y, +X lift): tau_y = +az*L, tau_z = +rc*L
-        if f_gain > 1.0:
+        if inp.fin_axis_eff_nm_per_rad is not None:
+            # Exact finite-difference axis slopes:
+            #   eff_x = d(tau_x)/d(d_yaw)   (< 0, shared across fins 0,1)
+            #   eff_y = d(tau_y)/d(d_pitch) (> 0, shared across fins 2,3)
+            #   eff_z = d(tau_z)/d(d_roll)  (> 0, shared across fins 0,1,2,3)
+            ex, ey, ez = inp.fin_axis_eff_nm_per_rad
+            b_mat[0, 0] = 0.5 * ex
+            b_mat[0, 1] = 0.5 * ex
+            b_mat[1, 2] = 0.5 * ey
+            b_mat[1, 3] = 0.5 * ey
+            b_mat[2, 0] = 0.25 * ez
+            b_mat[2, 1] = -0.25 * ez
+            b_mat[2, 2] = -0.25 * ez
+            b_mat[2, 3] = 0.25 * ez
+        elif f_gain > 1.0:
             b_mat[0, 0] = -az * f_gain
             b_mat[0, 1] = -az * f_gain
             b_mat[1, 2] = az * f_gain
@@ -131,23 +149,38 @@ class PriorityControlAllocator3D:
         fin_cmd = [0.0, 0.0, 0.0, 0.0]
         fin_tau = np.zeros(3, dtype=np.float64)
 
-        if f_gain > 1.0:
-            # Zero-deflection weathercock torque from tail-first AoA: delta_eff = delta - a_retro
-            tau0 = np.array(
-                [
-                    2.0 * az * f_gain * ay_ret,
-                    -2.0 * az * f_gain * ax_ret,
-                    0.0,
-                ],
-                dtype=np.float64,
-            )
+        if f_gain > 1.0 or inp.fin_axis_eff_nm_per_rad is not None:
+            if inp.fin_zero_torque_body_nm is not None and inp.fin_axis_eff_nm_per_rad is not None:
+                tau0 = np.asarray(inp.fin_zero_torque_body_nm, dtype=np.float64)
+                eff_yaw, eff_pitch, eff_roll = inp.fin_axis_eff_nm_per_rad
+            else:
+                # Analytical weathercock torque from tail-first AoA: delta_eff = delta - a_retro
+                tau0 = np.array(
+                    [
+                        2.0 * az * f_gain * ay_ret,
+                        -2.0 * az * f_gain * ax_ret,
+                        0.0,
+                    ],
+                    dtype=np.float64,
+                )
+                eff_yaw = -2.0 * az * f_gain
+                eff_pitch = 2.0 * az * f_gain
+                eff_roll = 4.0 * rc * f_gain
             if inp.allow_fin_allocation:
                 # 1a) Differential roll command shared across all 4 fins (priority #1)
-                d_roll = float(req_guarded[2]) / max(4.0 * rc * f_gain, 1e-6)
+                d_roll = float(req_guarded[2] - tau0[2]) / eff_roll if abs(eff_roll) > 1e-6 else 0.0
                 d_roll = max(-0.5 * self._fin_lim, min(0.5 * self._fin_lim, d_roll))
                 # 1b) Collective yaw (fins 0,1) & pitch (fins 2,3)
-                d_yaw = (float(req_guarded[0]) - float(tau0[0])) / (-2.0 * az * f_gain)
-                d_pitch = (float(req_guarded[1]) - float(tau0[1])) / (2.0 * az * f_gain)
+                d_yaw = (
+                    (float(req_guarded[0]) - float(tau0[0])) / eff_yaw
+                    if abs(eff_yaw) > 1e-6
+                    else 0.0
+                )
+                d_pitch = (
+                    (float(req_guarded[1]) - float(tau0[1])) / eff_pitch
+                    if abs(eff_pitch) > 1e-6
+                    else 0.0
+                )
 
                 fin_cmd = [
                     max(lo_y, min(hi_y, d_yaw + d_roll)),
@@ -157,7 +190,7 @@ class PriorityControlAllocator3D:
                 ]
             else:
                 # Feather fins into airflow while allowing tiny differential roll damping
-                d_roll = float(req_guarded[2]) / max(4.0 * rc * f_gain, 1e-6)
+                d_roll = float(req_guarded[2] - tau0[2]) / eff_roll if abs(eff_roll) > 1e-6 else 0.0
                 d_roll = max(-radians(4.0), min(radians(4.0), d_roll))
                 fin_cmd = [
                     max(lo_y, min(hi_y, ay_ret + d_roll)),
@@ -250,9 +283,17 @@ class PriorityControlAllocator3D:
             else:
                 tvc_tau_mid = np.zeros(3, dtype=np.float64)
 
-            # Always use TVC slew-midpoint torque for RCS compensation so ignition/gimbal
-            # slew transients at high q never leave aerodynamic torque unopposed.
-            eff_tvc = tvc_tau_mid
+            # Use TVC slew-midpoint torque during ignition spool-up, shutdown tail-off, and
+            # vertical-body thrust steering; use commanded TVC during steady powered flight so
+            # noisy-IMU gimbal jitter during 7-engine ascent never burns RCS propellant.
+            if (
+                inp.thrust_tilt_cmd_body_xy is not None
+                or (inp.sizing_thrust_n <= 1.0 and t_cur > 1.0)
+                or (inp.sizing_thrust_n > 1.0 and t_cur < 0.85 * inp.sizing_thrust_n)
+            ):
+                eff_tvc = tvc_tau_mid
+            else:
+                eff_tvc = tvc_tau
 
             res_after_tvc = req_guarded - (fin_tau + eff_tvc)
             lims = (

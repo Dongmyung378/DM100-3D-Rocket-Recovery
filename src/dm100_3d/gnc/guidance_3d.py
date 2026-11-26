@@ -688,6 +688,52 @@ class RtlsController3D:
         else:
             ax_ret, ay_ret = 0.0, 0.0
 
+        # Exact operating-point linearization of 4-fin aero (includes fin drag weathercock
+        # torque and cos(alpha) lift projection so RCS seamlessly fills any true fin deficit).
+        fin_tau0_exact: tuple[float, float, float] | None = None
+        fin_eff_exact: tuple[float, float, float] | None = None
+        if (
+            not est.upper_attached
+            and est.fin_extension >= 0.05
+            and q_pa >= self.vehicle.fins.control_min_q_pa
+        ):
+            dx_ref = max(-0.25, min(0.25, ax_ret))
+            dy_ref = max(-0.25, min(0.25, ay_ret))
+            u_fin = radians(1.0)
+
+            def _eval_fin(d4: tuple[float, float, float, float]) -> NDArray[np.float64]:
+                _, t_f, _ = compute_fins_aero_3d(
+                    altitude_m=est.pos_enu_m[2],
+                    vel_enu_m_s=est.vel_enu_m_s,
+                    rot_wb=r_wb,
+                    omega_body_rad_s=om_b,
+                    cg_station_m=cg,
+                    fin_deflection_rad=d4,
+                    fin_extension=est.fin_extension,
+                    atmo_lut=self.forecast_atmo,
+                    wind_lut=self.forecast_wind,
+                    time_s=est.time_s,
+                    vehicle=self.vehicle,
+                )
+                return t_f
+
+            t_ref = _eval_fin((dy_ref, dy_ref, dx_ref, dx_ref))
+            t_yp = _eval_fin((dy_ref + u_fin, dy_ref + u_fin, dx_ref, dx_ref))
+            t_ym = _eval_fin((dy_ref - u_fin, dy_ref - u_fin, dx_ref, dx_ref))
+            t_pp = _eval_fin((dy_ref, dy_ref, dx_ref + u_fin, dx_ref + u_fin))
+            t_pm = _eval_fin((dy_ref, dy_ref, dx_ref - u_fin, dx_ref - u_fin))
+            t_rp = _eval_fin((dy_ref + u_fin, dy_ref - u_fin, dx_ref - u_fin, dx_ref + u_fin))
+            t_rm = _eval_fin((dy_ref - u_fin, dy_ref + u_fin, dx_ref + u_fin, dx_ref - u_fin))
+            eff_x = float(t_yp[0] - t_ym[0]) / (2.0 * u_fin)
+            eff_y = float(t_pp[1] - t_pm[1]) / (2.0 * u_fin)
+            eff_z = float(t_rp[2] - t_rm[2]) / (2.0 * u_fin)
+            fin_tau0_exact = (
+                float(t_ref[0]) - eff_x * dy_ref,
+                float(t_ref[1]) - eff_y * dx_ref,
+                float(t_ref[2]),
+            )
+            fin_eff_exact = (eff_x, eff_y, eff_z)
+
         lever = cg - self.vehicle.geometry.nozzle_station_m
         fin_arm_z = self.vehicle.fins.station_m - cg
         out = self.allocator.allocate(
@@ -709,6 +755,8 @@ class RtlsController3D:
                 control_dt_s=s.control_dt_s,
                 angular_accel_guard_deg_s2=accel_guard_deg_s2,
                 rcs_deadband_nm=rcs_deadband_nm,
+                fin_zero_torque_body_nm=fin_tau0_exact,
+                fin_axis_eff_nm_per_rad=fin_eff_exact,
             )
         )
         # Guard pre-separation RCS torque against lighter post-separation booster inertia
