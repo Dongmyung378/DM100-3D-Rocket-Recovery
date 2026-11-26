@@ -1,0 +1,385 @@
+"""DM100 3D vehicle specification, YAML configuration loader, and 3D mass-inertia properties.
+
+All mass, geometry, propulsion, aerodynamic, grid-fin, upper-stage, and safety parameters
+inherit directly from DM100 2D (`DM100-2D-Rocket-Recovery`) and extend cleanly to 6DOF
+(including 3-axis inertia tensor diag(Ixx, Iyy, Izz) and 4 independent landing legs/fins).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from math import pi
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+G0 = 9.80665
+R_AIR = 287.05287
+EARTH_RADIUS_M = 6_371_000.0
+EARTH_MU_M3_S2 = 3.986004418e14
+OMEGA_EARTH = 7.292115e-5
+EARTH_EQUATORIAL_SPEED_M_S = 465.101
+SUTTON_GRAVES_EARTH_K = 1.7415e-4
+
+
+@dataclass(frozen=True, slots=True)
+class VehicleGeometry:
+    body_length_m: float = 24.0
+    body_radius_m: float = 1.55
+    engine_mass_kg: float = 1_050.0
+    engine_station_m: float = 0.8
+    airframe_mass_kg: float = 3_750.0
+    airframe_station_m: float = 11.5
+    gear_mass_kg: float = 800.0
+    gear_retracted_station_m: float = 2.0
+    gear_deployed_station_m: float = 0.3
+    tank_bottom_m: float = 3.0
+    tank_length_m: float = 15.0
+    propellant_density_kg_m3: float = 830.0
+    nozzle_station_m: float = -0.2
+    nozzle_radius_m: float = 0.78
+    rcs_station_m: float = 22.4
+    rcs_arm_m: float = 9.5
+    upper_station_m: float = 28.0
+    upper_length_m: float = 9.0
+
+
+@dataclass(frozen=True, slots=True)
+class PropellantBudget:
+    main_propellant_kg: float = 69_500.0
+    rcs_propellant_kg: float = 300.0
+
+
+@dataclass(frozen=True, slots=True)
+class PropulsionConfig:
+    engine_count: int = 7
+    sea_level_thrust_n: float = 1_550_000.0
+    sea_level_isp_s: float = 325.0
+    nozzle_exit_area_m2: float = 1.4113
+    min_engine_throttle: float = 0.36
+    max_restarts: int = 3
+    gimbal_limit_deg: float = 6.0
+    gimbal_rate_deg_s: float = 60.0
+    gimbal_tau_s: float = 0.06
+    nominal_engine_tau_s: float = 0.04
+    rcs_isp_s: float = 260.0
+    rcs_torque_limit_nm: float = 100_000.0
+    rcs_roll_torque_limit_nm: float = 18_000.0
+
+    def throttle_bounds(self, active_engines: int) -> tuple[float, float]:
+        if active_engines <= 0:
+            return (0.0, 0.0)
+        frac = min(active_engines, self.engine_count) / self.engine_count
+        return (self.min_engine_throttle * frac, frac)
+
+    def quantize_throttle(self, requested_total: float, active_engines: int) -> float:
+        if active_engines <= 0 or requested_total <= 1e-6:
+            return 0.0
+        low, high = self.throttle_bounds(active_engines)
+        return max(low, min(high, requested_total))
+
+
+@dataclass(frozen=True, slots=True)
+class AeroConfig:
+    axial_cd_ascent: float = 0.40
+    axial_cd_descent: float = 1.65
+    normal_cd: float = 0.80
+    slender_lift_slope: float = 2.0
+    pressure_center_ascent_m: float = 11.5
+    pressure_center_descent_m: float = 11.0
+    rotation_damping: float = 0.30
+    roll_damping: float = 0.08
+    transonic_drag_rise: float = 0.20
+
+
+@dataclass(frozen=True, slots=True)
+class GridFinConfig:
+    count: int = 4
+    surface_mass_kg: float = 360.0
+    actuator_mass_kg: float = 160.0
+    deployment_mass_kg: float = 60.0
+    electrical_mass_kg: float = 20.0
+    station_m: float = 22.4
+    mean_mass_radius_m: float = 1.55
+    radial_center_m: float = 2.15
+    installed_area_m2: float = 6.0
+    per_fin_area_m2: float = 1.5
+    lift_slope_rad_inv: float = 2.8
+    max_lift_coefficient: float = 1.0
+    base_drag_coefficient: float = 0.35
+    induced_drag_factor: float = 0.50
+    deflection_limit_deg: float = 20.0
+    deflection_rate_deg_s: float = 60.0
+    actuator_time_constant_s: float = 0.08
+    deployment_time_s: float = 2.0
+    retraction_time_s: float = 2.0
+    control_min_q_pa: float = 80.0
+    control_max_alpha_deg: float = 25.0
+    model_max_mach: float = 8.0
+    hinge_arm_m: float = 0.12
+    per_fin_hinge_limit_nm: float = 7_500.0
+
+    @property
+    def mass_kg(self) -> float:
+        return (
+            self.surface_mass_kg
+            + self.actuator_mass_kg
+            + self.deployment_mass_kg
+            + self.electrical_mass_kg
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LandingGearConfig:
+    """4-leg 3D telescoping landing gear matching 2D vertical stiffness (4*80 = 2*160 kN/m)."""
+
+    leg_count: int = 4
+    half_span_m: float = 4.0
+    foot_station_m: float = -1.0
+    anchor_station_m: float = 1.2
+    deployment_time_s: float = 2.0
+    pad_radius_m: float = 10.0
+    per_leg_stiffness_n_m: float = 80_000.0
+    per_leg_damping_n_s_m: float = 22_500.0
+    friction_coefficient: float = 0.75
+    friction_velocity_scale_m_s: float = 0.05
+    max_leg_stroke_m: float = 0.90
+    max_leg_force_n: float = 250_000.0
+    max_contact_load_g: float = 4.0
+    settle_duration_s: float = 5.0
+    max_standing_tilt_deg: float = 5.0
+    max_standing_speed_m_s: float = 0.08
+    max_standing_rate_deg_s: float = 0.5
+
+
+@dataclass(frozen=True, slots=True)
+class UpperStageConfig:
+    dry_mass_kg: float = 1_550.0
+    propellant_mass_kg: float = 20_650.0
+    payload_mass_kg: float = 1_800.0
+    vacuum_thrust_n: float = 240_000.0
+    vacuum_isp_s: float = 380.0
+    target_altitude_m: float = 700_000.0
+    altitude_tolerance_m: float = 15_000.0
+    ignition_coast_s: float = 4.0
+    replay_post_sep_duration_s: float = 25.0
+
+    @property
+    def total_mass_kg(self) -> float:
+        return self.dry_mass_kg + self.propellant_mass_kg + self.payload_mass_kg
+
+
+@dataclass(frozen=True, slots=True)
+class FlightSafetyLimits:
+    max_q_pa: float = 42_000.0
+    max_heat_flux_w_m2: float = 80_000.0
+    max_q_alpha_kpa_deg: float = 150.0
+    max_high_q_alpha_deg: float = 5.0
+    max_angular_rate_deg_s: float = 15.0
+    max_angular_acceleration_deg_s2: float = 5.0
+    max_ascent_axial_g: float = 4.5
+    max_recovery_flight_g: float = 5.5
+    max_position_error_m: float = 2.0
+    max_horizontal_contact_speed_m_s: float = 0.5
+    max_vertical_foot_speed_m_s: float = 1.5
+    max_contact_tilt_deg: float = 3.0
+    max_contact_rate_deg_s: float = 0.5
+
+
+@dataclass(frozen=True, slots=True)
+class AscentGateConfig:
+    separation_altitude_m: float = 60_000.0
+    separation_tolerance_m: float = 16_000.0
+    separation_min_main_propellant_kg: float = 12_300.0
+    separation_min_speed_m_s: float = 1_600.0
+    separation_max_q_pa: float = 3_000.0
+    separation_max_rate_deg_s: float = 5.0
+    separation_max_alpha_deg: float = 5.0
+
+
+@dataclass(frozen=True, slots=True)
+class DM100VehicleConfig:
+    root_seed: int = 378
+    vehicle_name: str = "DM100-3D"
+    geometry: VehicleGeometry = field(default_factory=VehicleGeometry)
+    propellant: PropellantBudget = field(default_factory=PropellantBudget)
+    propulsion: PropulsionConfig = field(default_factory=PropulsionConfig)
+    aerodynamics: AeroConfig = field(default_factory=AeroConfig)
+    fins: GridFinConfig = field(default_factory=GridFinConfig)
+    landing_gear: LandingGearConfig = field(default_factory=LandingGearConfig)
+    upper_stage: UpperStageConfig = field(default_factory=UpperStageConfig)
+    safety: FlightSafetyLimits = field(default_factory=FlightSafetyLimits)
+    ascent_gate: AscentGateConfig = field(default_factory=AscentGateConfig)
+
+    @property
+    def booster_dry_mass_kg(self) -> float:
+        return (
+            self.geometry.engine_mass_kg
+            + self.geometry.airframe_mass_kg
+            + self.geometry.gear_mass_kg
+            + self.fins.mass_kg
+        )
+
+    @property
+    def booster_wet_mass_kg(self) -> float:
+        return (
+            self.booster_dry_mass_kg
+            + self.propellant.main_propellant_kg
+            + self.propellant.rcs_propellant_kg
+        )
+
+    @property
+    def launch_mass_kg(self) -> float:
+        return self.booster_wet_mass_kg + self.upper_stage.total_mass_kg
+
+
+@dataclass(frozen=True, slots=True)
+class MassProperties3D:
+    total_mass_kg: float
+    cg_station_m: float
+    inertia_diag_kg_m2: tuple[float, float, float]
+    fuel_height_m: float
+
+
+def mass_properties_3d(
+    total_mass_kg: float,
+    gear_extension: float,
+    *,
+    vehicle: DM100VehicleConfig | None = None,
+    upper_attached: bool = False,
+    airframe_mass_offset_kg: float = 0.0,
+    inertia_scale: float = 1.0,
+) -> MassProperties3D:
+    """Compute exact 3D mass, COM station, and diagonal inertia (Ixx, Iyy, Izz).
+
+    Pitch/yaw inertia (Ixx = Iyy) matches DM100 2D `fast_mass_properties` bit-for-bit.
+    Roll inertia (Izz) sums cylindrical/ring inertia of all booster/upper components about +z_b.
+    """
+    cfg = vehicle or DM100VehicleConfig()
+    g = cfg.geometry
+    gear = cfg.landing_gear
+    fins = cfg.fins
+    upper_mass = cfg.upper_stage.total_mass_kg
+
+    airframe_mass = g.airframe_mass_kg + airframe_mass_offset_kg
+    fixed_dry = (
+        g.engine_mass_kg
+        + airframe_mass
+        + g.gear_mass_kg
+        + fins.mass_kg
+        + (upper_mass if upper_attached else 0.0)
+    )
+    fuel = max(0.0, total_mass_kg - fixed_dry)
+
+    r = g.body_radius_m
+    r2 = r * r
+    fuel_h = fuel / (g.propellant_density_kg_m3 * pi * r2)
+    fuel_st = g.tank_bottom_m + 0.5 * fuel_h
+    dep = max(0.0, min(1.0, gear_extension))
+    gear_st = (1.0 - dep) * g.gear_retracted_station_m + dep * g.gear_deployed_station_m
+    gear_r = (1.0 - dep) * r + dep * (0.5 * gear.half_span_m)
+
+    m_eng = g.engine_mass_kg
+    s_eng = g.engine_station_m
+    i_eng = m_eng * ((2.0 * s_eng) ** 2 / 12.0 + g.nozzle_radius_m**2 / 4.0)
+    izz_eng = 0.5 * m_eng * (g.nozzle_radius_m**2)
+
+    s_air = g.airframe_station_m
+    i_air = airframe_mass * (g.body_length_m**2 / 12.0 + r2 / 4.0)
+    izz_air = airframe_mass * r2  # thin-walled cylindrical shell
+
+    m_gear = g.gear_mass_kg
+    i_gear = m_gear * (gear_r**2)
+    izz_gear = m_gear * (gear_r**2)
+
+    i_fuel = fuel * (fuel_h * fuel_h / 12.0 + r2 / 4.0)
+    izz_fuel = 0.5 * fuel * r2  # solid propellant column
+
+    m_fin = fins.mass_kg
+    i_fin = m_fin * (fins.mean_mass_radius_m**2)
+    izz_fin = m_fin * (fins.mean_mass_radius_m**2)
+
+    tot = m_eng + airframe_mass + m_gear + fuel + m_fin
+    mom = (
+        m_eng * s_eng
+        + airframe_mass * s_air
+        + m_gear * gear_st
+        + fuel * fuel_st
+        + m_fin * fins.station_m
+    )
+    if upper_attached:
+        tot += upper_mass
+        mom += upper_mass * g.upper_station_m
+    cg = mom / tot
+
+    i_lat = (
+        i_eng
+        + m_eng * (s_eng - cg) ** 2
+        + i_air
+        + airframe_mass * (s_air - cg) ** 2
+        + i_gear
+        + m_gear * (gear_st - cg) ** 2
+        + i_fuel
+        + fuel * (fuel_st - cg) ** 2
+        + i_fin
+        + m_fin * (fins.station_m - cg) ** 2
+    )
+    izz_booster = izz_eng + izz_air + izz_gear + izz_fuel + izz_fin
+
+    if upper_attached:
+        i_up = upper_mass * (g.upper_length_m**2 / 12.0 + r2 / 4.0)
+        izz_up = 0.5 * upper_mass * r2
+        booster_tot = tot - upper_mass
+        booster_cg = (mom - upper_mass * g.upper_station_m) / booster_tot
+        booster_i = (
+            i_eng
+            + m_eng * (s_eng - booster_cg) ** 2
+            + i_air
+            + airframe_mass * (s_air - booster_cg) ** 2
+            + i_gear
+            + m_gear * (gear_st - booster_cg) ** 2
+            + i_fuel
+            + fuel * (fuel_st - booster_cg) ** 2
+            + i_fin
+            + m_fin * (fins.station_m - booster_cg) ** 2
+        )
+        i_lat = (
+            i_lat
+            + (inertia_scale - 1.0) * booster_i
+            + i_up
+            + upper_mass * (g.upper_station_m - cg) ** 2
+        )
+        i_roll = inertia_scale * izz_booster + izz_up
+    else:
+        i_lat *= inertia_scale
+        i_roll = inertia_scale * izz_booster
+
+    return MassProperties3D(
+        total_mass_kg=float(tot),
+        cg_station_m=float(cg),
+        inertia_diag_kg_m2=(float(i_lat), float(i_lat), float(i_roll)),
+        fuel_height_m=float(fuel_h),
+    )
+
+
+def load_vehicle_config(path: str | Path | None = None) -> DM100VehicleConfig:
+    """Load DM100VehicleConfig from YAML (defaults to configs/vehicle_dm100.yaml)."""
+    if path is None:
+        return DM100VehicleConfig()
+    raw: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or raw.get("schema_version") != 1:
+        raise ValueError("Vehicle config YAML must have schema_version: 1")
+    return DM100VehicleConfig(
+        root_seed=int(raw.get("root_seed", 378)),
+        vehicle_name=str(raw.get("vehicle_name", "DM100-3D")),
+        geometry=VehicleGeometry(**raw.get("geometry", {})),
+        propellant=PropellantBudget(**raw.get("propellant", {})),
+        propulsion=PropulsionConfig(**raw.get("propulsion", {})),
+        aerodynamics=AeroConfig(**raw.get("aerodynamics", {})),
+        fins=GridFinConfig(**raw.get("fins", {})),
+        landing_gear=LandingGearConfig(**raw.get("landing_gear", {})),
+        upper_stage=UpperStageConfig(**raw.get("upper_stage", {})),
+        safety=FlightSafetyLimits(**raw.get("safety", {})),
+        ascent_gate=AscentGateConfig(**raw.get("ascent_gate", {})),
+    )

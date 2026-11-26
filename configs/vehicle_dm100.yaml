@@ -1,0 +1,133 @@
+schema_version: 1
+root_seed: 378
+vehicle_name: DM100-3D
+
+geometry:
+  body_length_m: 24.0
+  body_radius_m: 1.55
+  engine_mass_kg: 1050.0
+  engine_station_m: 0.8
+  airframe_mass_kg: 3750.0
+  airframe_station_m: 11.5
+  gear_mass_kg: 800.0
+  gear_retracted_station_m: 2.0
+  gear_deployed_station_m: 0.3
+  tank_bottom_m: 3.0
+  tank_length_m: 15.0
+  propellant_density_kg_m3: 830.0
+  nozzle_station_m: -0.2
+  nozzle_radius_m: 0.78
+  rcs_station_m: 22.4
+  rcs_arm_m: 9.5
+  upper_station_m: 28.0
+  upper_length_m: 9.0
+
+propellant:
+  main_propellant_kg: 69500.0
+  rcs_propellant_kg: 300.0
+
+propulsion:
+  engine_count: 7
+  sea_level_thrust_n: 1550000.0
+  sea_level_isp_s: 325.0
+  nozzle_exit_area_m2: 1.4113
+  min_engine_throttle: 0.36
+  max_restarts: 3
+  gimbal_limit_deg: 6.0
+  gimbal_rate_deg_s: 60.0
+  gimbal_tau_s: 0.06
+  nominal_engine_tau_s: 0.04
+  rcs_isp_s: 260.0
+  rcs_torque_limit_nm: 100000.0
+  rcs_roll_torque_limit_nm: 18000.0
+
+aerodynamics:
+  axial_cd_ascent: 0.40
+  axial_cd_descent: 1.65
+  normal_cd: 0.80
+  slender_lift_slope: 2.0
+  pressure_center_ascent_m: 11.5
+  pressure_center_descent_m: 11.0
+  rotation_damping: 0.30
+  roll_damping: 0.08
+  transonic_drag_rise: 0.20
+
+fins:
+  count: 4
+  surface_mass_kg: 360.0
+  actuator_mass_kg: 160.0
+  deployment_mass_kg: 60.0
+  electrical_mass_kg: 20.0
+  station_m: 22.4
+  mean_mass_radius_m: 1.55
+  radial_center_m: 2.15
+  installed_area_m2: 6.0
+  per_fin_area_m2: 1.5
+  lift_slope_rad_inv: 2.8
+  max_lift_coefficient: 1.0
+  base_drag_coefficient: 0.35
+  induced_drag_factor: 0.50
+  deflection_limit_deg: 20.0
+  deflection_rate_deg_s: 60.0
+  actuator_time_constant_s: 0.08
+  deployment_time_s: 2.0
+  retraction_time_s: 2.0
+  control_min_q_pa: 80.0
+  control_max_alpha_deg: 25.0
+  model_max_mach: 8.0
+  hinge_arm_m: 0.12
+  per_fin_hinge_limit_nm: 7500.0
+
+landing_gear:
+  leg_count: 4
+  half_span_m: 4.0
+  foot_station_m: -1.0
+  anchor_station_m: 1.2
+  deployment_time_s: 2.0
+  pad_radius_m: 10.0
+  per_leg_stiffness_n_m: 80000.0
+  per_leg_damping_n_s_m: 22500.0
+  friction_coefficient: 0.75
+  friction_velocity_scale_m_s: 0.05
+  max_leg_stroke_m: 0.90
+  max_leg_force_n: 250000.0
+  max_contact_load_g: 4.0
+  settle_duration_s: 5.0
+  max_standing_tilt_deg: 5.0
+  max_standing_speed_m_s: 0.08
+  max_standing_rate_deg_s: 0.5
+
+upper_stage:
+  dry_mass_kg: 1550.0
+  propellant_mass_kg: 20650.0
+  payload_mass_kg: 1800.0
+  vacuum_thrust_n: 240000.0
+  vacuum_isp_s: 380.0
+  target_altitude_m: 700000.0
+  altitude_tolerance_m: 15000.0
+  ignition_coast_s: 4.0
+  replay_post_sep_duration_s: 25.0
+
+safety:
+  max_q_pa: 42000.0
+  max_heat_flux_w_m2: 80000.0
+  max_q_alpha_kpa_deg: 150.0
+  max_high_q_alpha_deg: 5.0
+  max_angular_rate_deg_s: 15.0
+  max_angular_acceleration_deg_s2: 5.0
+  max_ascent_axial_g: 4.5
+  max_recovery_flight_g: 5.5
+  max_position_error_m: 2.0
+  max_horizontal_contact_speed_m_s: 0.5
+  max_vertical_foot_speed_m_s: 1.5
+  max_contact_tilt_deg: 3.0
+  max_contact_rate_deg_s: 0.5
+
+ascent_gate:
+  separation_altitude_m: 60000.0
+  separation_tolerance_m: 16000.0
+  separation_min_main_propellant_kg: 12300.0
+  separation_min_speed_m_s: 1600.0
+  separation_max_q_pa: 3000.0
+  separation_max_rate_deg_s: 5.0
+  separation_max_alpha_deg: 5.0

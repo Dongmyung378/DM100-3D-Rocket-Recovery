@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Environments & secrets
+.venv/
+venv/
+.env
+.kaggle/
+kaggle.json
+.idea/
+.vscode/
+
+# Generated simulation & validation outputs
+artifacts/
+.local/
+
+# Unreal Engine 5.4 generated directories & renders
+ue5/DM100Cinematics/Intermediate/
+ue5/DM100Cinematics/Saved/
+ue5/DM100Cinematics/DerivedDataCache/
+ue5/DM100Cinematics/Binaries/
+ue5/DM100Cinematics/.vs/
+ue5/DM100Cinematics/*.sln
+ue5/renders/
+
+# OS files
+.DS_Store
+Thumbs.db

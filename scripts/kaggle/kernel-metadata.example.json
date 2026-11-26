@@ -1,0 +1,14 @@
+{
+  "id": "YOUR_KAGGLE_USERNAME/dm100-3d-validation-shard-0",
+  "title": "DM100 3D Validation Shard 0",
+  "code_file": "run_shard_template.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}
