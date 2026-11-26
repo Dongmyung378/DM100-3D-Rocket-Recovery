@@ -52,14 +52,16 @@ def slosh_displacement_3d(
             np.array([1.0, 0.0, 0.0], dtype=np.float64),
             np.array([0.0, 1.0, 0.0], dtype=np.float64),
         )
-    theta = min(r_arc / l_p, 0.48 * pi)
+    theta = r_arc / l_p
     ux = state.qx_m / r_arc
     uy = state.qy_m / r_arc
     st = sin(theta)
     ct = cos(theta)
     u = np.array([l_p * st * ux, l_p * st * uy, l_p * (1.0 - ct)], dtype=np.float64)
-    # Exact tangents along qx and qy (reduces to [cos(th), 0, sin(th)] when qy == 0)
-    sinc = st / theta
+    # Exact tangents along qx and qy (reduces identically to 2D [cos(th), 0, sin(th)]
+    # for all arc lengths, without artificial 86 deg zero-g integrator windup!)
+    theta_w = ((theta + pi) % (2.0 * pi)) - pi
+    sinc = 1.0 if abs(theta_w) < 1e-9 else sin(theta_w) / theta_w
     du_dqx = np.array(
         [ct * ux * ux + sinc * uy * uy, (ct - sinc) * ux * uy, st * ux], dtype=np.float64
     )

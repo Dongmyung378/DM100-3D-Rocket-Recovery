@@ -272,7 +272,11 @@ class PriorityControlAllocator3D:
                 val = float(res_after_tvc[ax_i])
                 db_i = inp.rcs_deadband_nm * min(1.0, float(i_vec[ax_i]) / i_ref)
                 if db_i > 0.0:
-                    val = 0.0 if abs(val) <= db_i else (val - db_i if val > 0.0 else val + db_i)
+                    aval = abs(val)
+                    if aval <= db_i:
+                        val = 0.0
+                    elif aval < 1.5 * db_i:
+                        val *= (aval - db_i) / (0.5 * db_i)
                 g_tau_i = inp.inertia_diag_kg_m2[ax_i] * guard_rad_s2
                 sup = float(fin_tau[ax_i] + eff_tvc[ax_i])
                 lo = max(-lims[ax_i], -g_tau_i - float(bg[ax_i]) - sup)

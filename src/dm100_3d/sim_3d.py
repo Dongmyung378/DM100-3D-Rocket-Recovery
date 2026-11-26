@@ -720,12 +720,14 @@ class MuJoCoPlant3D:
                 self.slosh_domain_ok = False
             tau_b = tau_b + np.asarray(sl_resp.slosh_torque_body_nm, dtype=np.float64)
 
-            # Integrate slosh & propellant inventories
+            # Integrate slosh (symplectic midpoint) & propellant inventories
+            qxd_new = self.slosh_state.qxd_m_s + sl_resp.qdd_m_s2[0] * dt
+            qyd_new = self.slosh_state.qyd_m_s + sl_resp.qdd_m_s2[1] * dt
             self.slosh_state = Slosh3DState(
-                qx_m=self.slosh_state.qx_m + self.slosh_state.qxd_m_s * dt,
-                qy_m=self.slosh_state.qy_m + self.slosh_state.qyd_m_s * dt,
-                qxd_m_s=self.slosh_state.qxd_m_s + sl_resp.qdd_m_s2[0] * dt,
-                qyd_m_s=self.slosh_state.qyd_m_s + sl_resp.qdd_m_s2[1] * dt,
+                qx_m=self.slosh_state.qx_m + 0.5 * (self.slosh_state.qxd_m_s + qxd_new) * dt,
+                qy_m=self.slosh_state.qy_m + 0.5 * (self.slosh_state.qyd_m_s + qyd_new) * dt,
+                qxd_m_s=qxd_new,
+                qyd_m_s=qyd_new,
             )
             self.main_prop_kg = max(0.0, self.main_prop_kg - fr.delivered_flow_kg_s * dt)
             self.rcs_prop_kg = max(0.0, self.rcs_prop_kg - ft.rcs_flow_kg_s * dt)
