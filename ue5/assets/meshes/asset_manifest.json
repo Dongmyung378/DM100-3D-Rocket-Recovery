@@ -1,0 +1,122 @@
+{
+  "dm100_booster_hull": {
+    "path": "ue5\\assets\\meshes\\dm100_booster_hull.glb",
+    "bytes": 27580,
+    "part_count": 22,
+    "vertex_count": 976,
+    "face_count": 1864,
+    "bounds_zup_m": {
+      "min": [
+        -1.71,
+        -1.71,
+        -0.2
+      ],
+      "max": [
+        1.71,
+        1.71,
+        24.0
+      ],
+      "extents": [
+        3.42,
+        3.42,
+        24.2
+      ]
+    }
+  },
+  "dm100_upper_stage": {
+    "path": "ue5\\assets\\meshes\\dm100_upper_stage.glb",
+    "bytes": 39768,
+    "part_count": 5,
+    "vertex_count": 1138,
+    "face_count": 2256,
+    "bounds_zup_m": {
+      "min": [
+        -1.5732,
+        -1.5732,
+        -1.15
+      ],
+      "max": [
+        1.5732,
+        1.5732,
+        9.0
+      ],
+      "extents": [
+        3.1465,
+        3.1465,
+        10.15
+      ]
+    }
+  },
+  "dm100_grid_fin": {
+    "path": "ue5\\assets\\meshes\\dm100_grid_fin.glb",
+    "bytes": 8384,
+    "part_count": 11,
+    "vertex_count": 122,
+    "face_count": 200,
+    "bounds_zup_m": {
+      "min": [
+        -0.06,
+        -0.065,
+        -0.641
+      ],
+      "max": [
+        1.216,
+        0.065,
+        0.641
+      ],
+      "extents": [
+        1.276,
+        0.13,
+        1.282
+      ]
+    }
+  },
+  "dm100_landing_leg": {
+    "path": "ue5\\assets\\meshes\\dm100_landing_leg.glb",
+    "bytes": 6476,
+    "part_count": 4,
+    "vertex_count": 144,
+    "face_count": 272,
+    "bounds_zup_m": {
+      "min": [
+        -0.0796,
+        -0.4479,
+        -2.2
+      ],
+      "max": [
+        2.77,
+        0.4479,
+        2.6298
+      ],
+      "extents": [
+        2.8496,
+        0.8958,
+        4.8298
+      ]
+    }
+  },
+  "dm100_landing_pad": {
+    "path": "ue5\\assets\\meshes\\dm100_landing_pad.glb",
+    "bytes": 19344,
+    "part_count": 8,
+    "vertex_count": 732,
+    "face_count": 1432,
+    "bounds_zup_m": {
+      "min": [
+        -18.0,
+        -18.0,
+        -0.3
+      ],
+      "max": [
+        18.0,
+        18.0,
+        0.034
+      ],
+      "extents": [
+        36.0,
+        36.0,
+        0.334
+      ]
+    }
+  }
+}

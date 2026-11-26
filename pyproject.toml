@@ -38,6 +38,7 @@ where = ["src"]
 addopts = "-ra --strict-markers"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["slow: full closed-loop 6DOF flight tests (offloaded to Kaggle CPU shards)"]
 
 [tool.ruff]
 target-version = "py310"

@@ -1096,7 +1096,7 @@ class RtlsController3D:
         full_t, _ = compute_engine_thrust_3d(1.0, p_pa, self.vehicle)
 
         r_wb = quat_to_rotmat(est.quat_wxyz)
-        bf_w, _, _, _, _, _, _ = compute_body_aero_3d(
+        bf_w, btau_b_now, _, _, _, _, _ = compute_body_aero_3d(
             altitude_m=est.pos_enu_m[2],
             vel_enu_m_s=est.vel_enu_m_s,
             rot_wb=r_wb,
@@ -1107,7 +1107,7 @@ class RtlsController3D:
             time_s=est.time_s,
             vehicle=self.vehicle,
         )
-        ff_w, _, _ = compute_fins_aero_3d(
+        ff_w, ftau_b_now, _ = compute_fins_aero_3d(
             altitude_m=est.pos_enu_m[2],
             vel_enu_m_s=est.vel_enu_m_s,
             rot_wb=r_wb,
@@ -1121,6 +1121,9 @@ class RtlsController3D:
             vehicle=self.vehicle,
         )
         aero_f = bf_w + ff_w
+        tau_aero_b_now = btau_b_now + ftau_b_now
+        lever_trim = max(cg - self.vehicle.geometry.nozzle_station_m, 1.0)
+        max_gim_rad = radians(self.vehicle.propulsion.gimbal_limit_deg)
         a_cor = compute_coriolis_and_centrifugal_3d(
             altitude_m=est.pos_enu_m[2],
             vel_enu_m_s=est.vel_enu_m_s,
@@ -1199,7 +1202,7 @@ class RtlsController3D:
             a_t_sm = max(t_min / mass, min(t_max / mass, a_ff + g_loc - float(aero_f[2]) / mass))
 
             if vertical_body:
-                lever = max(cg - self.vehicle.geometry.nozzle_station_m, 1.0)
+                lever = lever_trim
                 t_rem = 2.0 * h_vref / max(vz_down + v_td, 1.0)
                 bf0_w, _, _, _, _, _, _ = compute_body_aero_3d(
                     altitude_m=est.pos_enu_m[2],
@@ -1217,14 +1220,30 @@ class RtlsController3D:
                 self._vb_wind_trim_xy += (1.0 - exp(-s.control_dt_s / 0.85)) * (
                     raw_wt - self._vb_wind_trim_xy
                 )
-                vb_dir_xy = self._vb_wind_trim_xy.copy()
 
-                ax_lim_rcs = (
-                    0.88 * self.vehicle.propulsion.rcs_torque_limit_nm / max(lever * mass, 1.0)
-                )
                 p_xy = np.array([est.pos_enu_m[0], est.pos_enu_m[1]], dtype=np.float64)
                 v_xy = np.array([est.vel_enu_m_s[0], est.vel_enu_m_s[1]], dtype=np.float64)
                 r_xy = float(np.linalg.norm(p_xy))
+                # Gentle off-pad centering lean (<= 2.45 deg, smoothly zeroed below h = 2.2 m)
+                p_stop_xy = p_xy + 0.95 * v_xy
+                r_stop = float(np.linalg.norm(p_stop_xy))
+                vb_mid_env = (
+                    _smoothstep((h_vref - 2.2) / 3.4)
+                    * _smoothstep((r_xy - 2.0) / 2.0)
+                    * _smoothstep((r_stop - 1.2) / 1.8)
+                )
+                th_vb_mid = -radians(0.75) * p_stop_xy * vb_mid_env
+                mid_nrm = float(np.linalg.norm(th_vb_mid))
+                if mid_nrm > radians(2.40) and mid_nrm > 1e-12:
+                    th_vb_mid *= radians(2.40) / mid_nrm
+                vb_dir_xy = self._vb_wind_trim_xy + th_vb_mid
+                vb_nrm = float(np.linalg.norm(vb_dir_xy))
+                if vb_nrm > radians(2.55) and vb_nrm > 1e-12:
+                    vb_dir_xy *= radians(2.55) / vb_nrm
+
+                ax_lim_rcs = (
+                    0.90 * self.vehicle.propulsion.rcs_torque_limit_nm / max(lever * mass, 1.0)
+                )
                 v_ground_safe = 0.14 + 0.85 * ax_lim_rcs * max(t_rem - 0.25, 0.0)
                 v_deck_cap = 0.08 + 3.4 * _smoothstep((h_vref - 0.5) / 1.65)
                 closing = min(
@@ -1242,22 +1261,47 @@ class RtlsController3D:
                 max_tilt = radians(s.landing_divert_max_tilt_deg)
             else:
                 t_kin = 2.0 * h_vref / max(vz_down + v_td, 1.0)
-                t_dec = max(0.0, vz_down - v_td) / max(0.5 * (a_lo + a_ff), 1.5)
+                a_dec_eff = max(1.5, 0.5 * (a_lo + a_ff) + max(0.0, 0.55 * self._land_bz_smooth))
+                t_dec = max(0.0, vz_down - v_td) / a_dec_eff
                 t_rem_b = min(28.0, max(1.0, 0.5 * (t_kin + t_dec)))
                 t_align = max(2.75, t_rem_b - 3.85)
+                a_att_b = radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+
+                # Quasi-static 2-axis TVC aerodynamic trim:
+                #   tvc_tau = [lever*T*gx, -lever*T*gy, 0] cancels tau_aero_b_now
+                #   -> gy_trim = +tau_y / (lever*T), gx_trim = -tau_x / (lever*T)
+                denom_gt = max(lever_trim * mass * a_t_sm, 1.0)
+                lim_gt = 0.85 * sin(max_gim_rad)
+                gim_trim_x = asin(max(-lim_gt, min(lim_gt, float(tau_aero_b_now[1]) / denom_gt)))
+                gim_trim_y = asin(max(-lim_gt, min(lim_gt, -float(tau_aero_b_now[0]) / denom_gt)))
 
                 th_trim_xy = np.clip(
                     (-aero_f[0:2] / mass - self._land_bxy_smooth - a_cor[0:2]) / max(a_t_sm, 5.0),
                     -0.25,
                     0.25,
                 )
+                tx_rel = tilt_x - float(th_trim_xy[0])
+                ty_rel = tilt_y - float(th_trim_xy[1])
+                if tx_rel * gim_trim_x < 0.0:
+                    tx_rel_eff = tx_rel + 0.80 * gim_trim_x
+                    if tx_rel_eff * tx_rel < 0.0:
+                        tx_rel_eff = 0.0
+                else:
+                    tx_rel_eff = tx_rel
+                if ty_rel * gim_trim_y < 0.0:
+                    ty_rel_eff = ty_rel + 0.80 * gim_trim_y
+                    if ty_rel_eff * ty_rel < 0.0:
+                        ty_rel_eff = 0.0
+                else:
+                    ty_rel_eff = ty_rel
+
                 p_lead, v_lead = predict_zero_tilt_state_3d(
                     (est.pos_enu_m[0], est.pos_enu_m[1]),
                     (est.vel_enu_m_s[0], est.vel_enu_m_s[1]),
-                    (tilt_x - float(th_trim_xy[0]), tilt_y - float(th_trim_xy[1])),
+                    (tx_rel_eff, ty_rel_eff),
                     (rate_tx, rate_ty),
                     a_t_sm,
-                    radians(2.55),
+                    a_att_b,
                     x_horizon_cap_s=2.4,
                 )
                 r_err = max(hypot(est.pos_enu_m[0], est.pos_enu_m[1]), hypot(p_lead[0], p_lead[1]))
@@ -1268,7 +1312,7 @@ class RtlsController3D:
                 )
                 tilt_floor = (
                     0.08
-                    + 0.40 * _smoothstep((r_err - 1.5) / 7.5)
+                    + 0.42 * _smoothstep((r_err - 1.5) / 7.5)
                     + 0.24 * _smoothstep((v_err - 0.6) / 1.5)
                 )
                 max_tilt = radians(s.landing_divert_max_tilt_deg) * max(tilt_floor, tilt_frac)
@@ -1316,7 +1360,41 @@ class RtlsController3D:
             max_f_xy = fz_req * sin(max_tilt) / max(cos(max_tilt), 0.5)
             if f_xy_mag > max_f_xy and f_xy_mag > 1e-9:
                 f_xy_req *= max_f_xy / f_xy_mag
-            dir_des = np.array([float(f_xy_req[0]), float(f_xy_req[1]), fz_req], dtype=np.float64)
+            dir_thrust = np.array(
+                [float(f_xy_req[0]), float(f_xy_req[1]), fz_req], dtype=np.float64
+            )
+            # Decouple 2-axis aerodynamic TVC gimbal trim so actual (body + gimbal) thrust aligns
+            # with `dir_thrust` without crosswind static bias (3D port of DM100 2D guidance).
+            r_dir = quat_to_rotmat(pointing_dir_to_quat_wxyz(dir_thrust))
+            _, btau_dir, _, _, _, _, _ = compute_body_aero_3d(
+                altitude_m=est.pos_enu_m[2],
+                vel_enu_m_s=est.vel_enu_m_s,
+                rot_wb=r_dir,
+                omega_body_rad_s=(0.0, 0.0, 0.0),
+                cg_station_m=cg,
+                atmo_lut=self.forecast_atmo,
+                wind_lut=self.forecast_wind,
+                time_s=est.time_s,
+                vehicle=self.vehicle,
+                drag_scale=self.cached_drag_scale,
+            )
+            denom_gd = max(lever_trim * mass * a_t_sm, 1.0)
+            lim_gd = 0.85 * sin(max_gim_rad)
+            g_trim_x = asin(max(-lim_gd, min(lim_gd, float(btau_dir[1]) / denom_gd)))
+            g_trim_y = asin(max(-lim_gd, min(lim_gd, -float(btau_dir[0]) / denom_gd)))
+            # Rotate thrust direction back into body centerline frame (subtract gimbal offset)
+            t_unit = dir_thrust / max(float(np.linalg.norm(dir_thrust)), 1e-9)
+            tx_b = atan2(float(t_unit[0]), max(float(t_unit[2]), 0.1)) - g_trim_x
+            ty_b = atan2(float(t_unit[1]), max(float(t_unit[2]), 0.1)) - g_trim_y
+            b_tilt_mag = hypot(tx_b, ty_b)
+            if b_tilt_mag > max_tilt and b_tilt_mag > 1e-12:
+                sc_b = max_tilt / b_tilt_mag
+                tx_b *= sc_b
+                ty_b *= sc_b
+            dir_des = np.array(
+                [sin(tx_b), sin(ty_b) * cos(tx_b), cos(tx_b) * cos(ty_b)],
+                dtype=np.float64,
+            )
 
         f_mag = sqrt(float(f_xy_req[0]) ** 2 + float(f_xy_req[1]) ** 2 + fz_req * fz_req)
         throttle = self.vehicle.propulsion.quantize_throttle(
@@ -1744,25 +1822,27 @@ class RtlsController3D:
                 h_above = max(h - h_ignite, 150.0)
                 k_gl = max(0.07, min(0.28, 0.11 * (5_000.0 / max(h_above, 1_500.0))))
                 pre_taper = _smoothstep((h - (h_ignite + 280.0)) / 420.0)
-                hi_z_cap = 5.0 + (s.glide_max_alpha_deg - 5.0) * (
+                hi_z_cap = 6.0 + (s.glide_max_alpha_deg - 6.0) * (
                     1.0 - _smoothstep((est.pos_enu_m[2] - 19_000.0) / 8_000.0)
                 )
                 q_cap = min(
                     hi_z_cap,
-                    s.glide_max_alpha_deg - 10.5 * _smoothstep((q_pa - 3_500.0) / 6_500.0),
+                    s.glide_max_alpha_deg - 7.5 * _smoothstep((q_pa - 3_500.0) / 6_500.0),
                 )
                 max_a = q_cap * pre_taper
 
                 # Causal 3D upwind drift lead compensating 24 s Hoverslam wind exposure
+                # (scaled down smoothly in thin/low-drag air to avoid over-leading)
                 glide_target_xy = np.zeros(2, dtype=np.float64)
                 if est.pos_enu_m[2] < 14_000.0:
+                    dense_w = max(0.0, min(1.3, (self.cached_drag_scale - 0.85) / 0.15))
                     w_gnd = self.forecast_wind.at(150.0, est.time_s)
                     w_mid = self.forecast_wind.at(2_000.0, est.time_s)
                     w_hi = self.forecast_wind.at(5_000.0, est.time_s)
                     for ax_i in range(2):
                         if w_gnd[ax_i] * w_mid[ax_i] > 0.0 and w_gnd[ax_i] * w_hi[ax_i] > 0.0:
                             w_low = 0.65 * w_gnd[ax_i] + 0.35 * w_mid[ax_i]
-                            glide_target_xy[ax_i] = max(-50.0, min(50.0, -4.5 * w_low))
+                            glide_target_xy[ax_i] = max(-55.0, min(55.0, -4.5 * w_low * dense_w))
 
                 gl_ramp = _smoothstep((est.time_s - (self.glide_started_s or est.time_s)) / 2.5)
                 iip_vec = np.array(self.cached_iip_xy_m, dtype=np.float64) - glide_target_xy

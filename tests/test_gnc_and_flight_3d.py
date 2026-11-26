@@ -6,6 +6,7 @@ from math import degrees, hypot, radians
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from dm100_3d.config import DM100VehicleConfig
 from dm100_3d.coords import axis_angle_to_quat_wxyz, quat_multiply_wxyz
@@ -180,6 +181,7 @@ def test_clarabel_3d_gfold_socp_solves_fast_and_handles_infeasible_fallback() ->
     assert all(np.isfinite((*p_b, *v_b)))
 
 
+@pytest.mark.slow
 def test_full_6dof_rtls_flight_calm_and_crosswind_with_replay(tmp_path: Path) -> None:
     """Phase 3 Exit Gate: End-to-end 6DOF MuJoCo launch -> 700 km orbit -> 3D RTLS -> 5s settle."""
     # 1. Calm 3D flight (includes real 3D crossrange Coriolis at 37 deg latitude!)
