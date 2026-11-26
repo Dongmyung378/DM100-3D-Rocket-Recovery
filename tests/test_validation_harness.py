@@ -96,5 +96,7 @@ def test_kaggle_shard_merge_and_script_generation(tmp_path: Path) -> None:
         repo_url="https://github.com/Dongmyung378/DM100-3D-Rocket-Recovery.git",
         repo_ref="main",
     )
-    assert "os.environ['DM100_SHARD'] = '2/4'" in script_txt
-    assert "os.environ['DM100_WORKERS'] = '4'" in script_txt
+    assert "_dm100_os.environ['DM100_SHARD'] = '2/4'" in script_txt
+    assert "_dm100_os.environ['DM100_WORKERS'] = '4'" in script_txt
+    # Must compile cleanly (no SyntaxError from placing code before __future__ import)
+    compile(script_txt, "<kaggle_shard>", "exec")

@@ -22,7 +22,16 @@ WORKERS = os.environ.get("DM100_WORKERS", "4")
 
 WORK_DIR = Path("/kaggle/working")
 DATASET_SRC = Path("/kaggle/input/dm100-3d-src")
-REPO_DIR = WORK_DIR / "DM100-3D-Rocket-Recovery"
+REPO_DIR = Path("/tmp/DM100-3D-Rocket-Recovery")
+
+for _env_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "RAYON_NUM_THREADS",
+):
+    os.environ.setdefault(_env_var, "1")
 
 
 def _run(cmd: list[str], *, cwd: Path | None = None) -> None:

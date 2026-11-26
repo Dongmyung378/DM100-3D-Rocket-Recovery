@@ -8,15 +8,25 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from dm100_3d.replay import export_replay_json
-from dm100_3d.sim_3d import Scenario3D, SimConfig3D, run_flight_3d
-from dm100_3d.validation_suites import get_validation_suite, select_shard
+for _env_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "RAYON_NUM_THREADS",
+):
+    os.environ.setdefault(_env_var, "1")
+
+from dm100_3d.replay import export_replay_json  # noqa: E402
+from dm100_3d.sim_3d import Scenario3D, SimConfig3D, run_flight_3d  # noqa: E402
+from dm100_3d.validation_suites import get_validation_suite, select_shard  # noqa: E402
 
 HERO_REPLAY_CASES = frozenset(
     {
@@ -76,7 +86,7 @@ def summarize_results(results: list[dict[str, Any]], *, suite: str, shard: str) 
 
     return {
         "schema": "dm100_3d_validation_v1",
-        "timestamp_utc": datetime.now(UTC).isoformat(),
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "suite": suite,
         "shard": shard,
         "total_cases": total,
@@ -134,10 +144,15 @@ def main() -> None:
                     with args.resume.open("a", encoding="utf-8") as fh:
                         fh.write(json.dumps(res, separators=(",", ":")) + "\n")
                 status = "PASS" if res["requirements_passed"] else f"FAIL {res['failed_criteria']}"
+                pos_err = res.get("position_error_m")
+                pos_str = f"{pos_err:.3f}m" if isinstance(pos_err, (int, float)) else str(pos_err)
+                roll_deg = res.get("peak_roll_deg")
+                roll_str = (
+                    f"{roll_deg:.2f} deg" if isinstance(roll_deg, (int, float)) else str(roll_deg)
+                )
                 print(
                     f"  [{len(completed)}/{len(shard_cases)}] {res['scenario']}: {status} "
-                    f"(pos={res.get('position_error_m')}, roll={res.get('peak_roll_deg'):.2f} deg, "
-                    f"t={res['wall_time_s']:.1f}s)",
+                    f"(pos={pos_str}, roll={roll_str}, t={res['wall_time_s']:.1f}s)",
                     flush=True,
                 )
 

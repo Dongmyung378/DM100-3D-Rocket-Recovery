@@ -10,8 +10,33 @@ import argparse
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
+
+
+def _resolve_kaggle_cli() -> str:
+    py_dir = Path(sys.executable).resolve().parent
+    for name in ("kaggle.exe", "kaggle"):
+        cand = py_dir / name
+        if cand.exists():
+            return str(cand)
+    found = shutil.which("kaggle")
+    if found:
+        return found
+    raise FileNotFoundError("Kaggle CLI executable not found in active Python environment or PATH.")
+
+
+def _resolve_username(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
+    if kaggle_json.exists():
+        data = json.loads(kaggle_json.read_text(encoding="utf-8"))
+        user = str(data.get("username", "")).strip()
+        if user:
+            return user
+    raise SystemExit("Kaggle username not provided and ~/.kaggle/kaggle.json not found.")
 
 
 def merge_shard_reports(shard_paths: list[Path], *, suite: str) -> dict[str, Any]:
@@ -58,22 +83,36 @@ def merge_shard_reports(shard_paths: list[Path], *, suite: str) -> dict[str, Any
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect and merge Kaggle 3D validation outputs.")
-    parser.add_argument("--username", required=True)
+    parser.add_argument(
+        "--username",
+        default=None,
+        help="Kaggle username (defaults to username in ~/.kaggle/kaggle.json)",
+    )
     parser.add_argument("--suite", default="edge-3d", choices=["edge-3d", "holdout-3d", "full-3d"])
     parser.add_argument("--shards", type=int, default=4)
+    parser.add_argument("--status-only", action="store_true", help="Only query shard statuses")
     parser.add_argument("--out-dir", type=Path, default=Path("artifacts/kaggle_results"))
     parser.add_argument("--replays-dir", type=Path, default=Path("artifacts/replays"))
     args = parser.parse_args()
+
+    username = _resolve_username(args.username)
+    kaggle_exe = _resolve_kaggle_cli()
+
+    if args.status_only:
+        for idx in range(args.shards):
+            slug = f"{username}/dm100-3d-{args.suite}-s{idx}of{args.shards}"
+            subprocess.run([kaggle_exe, "kernels", "status", slug], check=False)
+        return
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     args.replays_dir.mkdir(parents=True, exist_ok=True)
     shard_jsons: list[Path] = []
 
     for idx in range(args.shards):
-        slug = f"{args.username}/dm100-3d-{args.suite}-s{idx}of{args.shards}"
+        slug = f"{username}/dm100-3d-{args.suite}-s{idx}of{args.shards}"
         s_out = args.out_dir / f"shard_{idx}"
         s_out.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["kaggle", "kernels", "output", slug, "-p", str(s_out)], check=True)
+        subprocess.run([kaggle_exe, "kernels", "output", slug, "-p", str(s_out)], check=True)
         shard_jsons.extend(sorted(s_out.rglob("results_*.json")))
         for rep in s_out.rglob("*_50hz.json"):
             shutil.copy2(rep, args.replays_dir / rep.name)

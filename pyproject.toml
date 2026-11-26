@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,11 +7,11 @@ name = "dm100-3d"
 version = "0.1.0"
 description = "DM100 3D: 6DOF MuJoCo orbital launch, reusable RTLS GNC, and Unreal Engine 5.4 cinematic pipeline"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.10,<3.14"
 keywords = ["rocket", "mujoco", "6dof", "rtls", "gfold", "socp", "mekf", "unreal-engine"]
 dependencies = [
-    "numpy>=1.26,<3",
-    "scipy>=1.13,<2",
+    "numpy>=1.24,<3",
+    "scipy>=1.10,<2",
     "mujoco>=3.2,<4",
     "clarabel>=0.9,<1",
     "PyYAML>=6.0,<7",
@@ -40,7 +40,7 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
