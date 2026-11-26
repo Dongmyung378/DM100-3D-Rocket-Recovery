@@ -250,12 +250,9 @@ class PriorityControlAllocator3D:
             else:
                 tvc_tau_mid = np.zeros(3, dtype=np.float64)
 
-            if inp.thrust_tilt_cmd_body_xy is not None or (
-                inp.sizing_thrust_n <= 1.0 and t_cur > 1.0
-            ):
-                eff_tvc = tvc_tau_mid
-            else:
-                eff_tvc = tvc_tau
+            # Always use TVC slew-midpoint torque for RCS compensation so ignition/gimbal
+            # slew transients at high q never leave aerodynamic torque unopposed.
+            eff_tvc = tvc_tau_mid
 
             res_after_tvc = req_guarded - (fin_tau + eff_tvc)
             lims = (

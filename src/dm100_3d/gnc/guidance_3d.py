@@ -1136,7 +1136,10 @@ class RtlsController3D:
                 az_net = a_ff + k_v * (vz_down - v_stage_b_cap)
             az_net = max(-3.5, min(a_max_1_net, az_net))
 
-            if h_vref <= s.landing_vertical_body_height_m:
+            v_xy_mag_now = hypot(est.vel_enu_m_s[0], est.vel_enu_m_s[1])
+            if h_vref <= 10.0 or (
+                h_vref <= s.landing_vertical_body_height_m and v_xy_mag_now <= 4.5
+            ):
                 if not self.in_vertical_body:
                     self._vb_started_s = est.time_s
                 self.in_vertical_body = True
@@ -1189,7 +1192,7 @@ class RtlsController3D:
                 t_kin = 2.0 * h_vref / max(vz_down + v_td, 1.0)
                 t_dec = max(0.0, vz_down - v_td) / max(0.5 * (a_lo + a_ff), 1.5)
                 t_rem_b = min(28.0, max(1.0, 0.5 * (t_kin + t_dec)))
-                t_align = max(2.75, t_rem_b - 3.6)
+                t_align = max(2.75, t_rem_b - 3.85)
 
                 th_trim_xy = np.clip(
                     (-aero_f[0:2] / mass - self._land_bxy_smooth - a_cor[0:2]) / max(a_t_sm, 5.0),
@@ -1219,8 +1222,8 @@ class RtlsController3D:
                 max_tilt = radians(s.landing_divert_max_tilt_deg) * max(tilt_floor, tilt_frac)
                 a_xy_cmd = np.array(
                     [
-                        -7.2 * p_lead[0] / (t_align * t_align) - 6.0 * v_lead[0] / t_align,
-                        -7.2 * p_lead[1] / (t_align * t_align) - 6.0 * v_lead[1] / t_align,
+                        -7.4 * p_lead[0] / (t_align * t_align) - 6.2 * v_lead[0] / t_align,
+                        -7.4 * p_lead[1] / (t_align * t_align) - 6.2 * v_lead[1] / t_align,
                     ],
                     dtype=np.float64,
                 )
@@ -1691,12 +1694,24 @@ class RtlsController3D:
                     1.0 - _smoothstep((est.pos_enu_m[2] - 19_000.0) / 8_000.0)
                 )
                 q_cap = min(
-                    hi_z_cap, s.glide_max_alpha_deg - 8.5 * _smoothstep((q_pa - 3_500.0) / 6_500.0)
+                    hi_z_cap,
+                    s.glide_max_alpha_deg - 10.5 * _smoothstep((q_pa - 3_500.0) / 6_500.0),
                 )
                 max_a = q_cap * pre_taper
 
+                # Causal 3D upwind drift lead compensating 24 s Hoverslam wind exposure
+                glide_target_xy = np.zeros(2, dtype=np.float64)
+                if est.pos_enu_m[2] < 14_000.0:
+                    w_gnd = self.forecast_wind.at(150.0, est.time_s)
+                    w_mid = self.forecast_wind.at(2_000.0, est.time_s)
+                    w_hi = self.forecast_wind.at(5_000.0, est.time_s)
+                    for ax_i in range(2):
+                        if w_gnd[ax_i] * w_mid[ax_i] > 0.0 and w_gnd[ax_i] * w_hi[ax_i] > 0.0:
+                            w_low = 0.65 * w_gnd[ax_i] + 0.35 * w_mid[ax_i]
+                            glide_target_xy[ax_i] = max(-50.0, min(50.0, -4.5 * w_low))
+
                 gl_ramp = _smoothstep((est.time_s - (self.glide_started_s or est.time_s)) / 2.5)
-                iip_vec = np.array(self.cached_iip_xy_m, dtype=np.float64)
+                iip_vec = np.array(self.cached_iip_xy_m, dtype=np.float64) - glide_target_xy
                 raw_a_xy = k_gl * iip_vec * gl_ramp
                 a_nrm = float(np.linalg.norm(raw_a_xy))
                 if a_nrm > max_a and a_nrm > 1e-9:
