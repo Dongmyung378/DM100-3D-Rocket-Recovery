@@ -100,7 +100,7 @@ def main() -> None:
 
     if args.status_only:
         for idx in range(args.shards):
-            slug = f"{username}/dm100-3d-{args.suite}-s{idx}of{args.shards}"
+            slug = f"{username}/dm100-3d-{args.suite}-shard-{idx}-{args.shards}"
             subprocess.run([kaggle_exe, "kernels", "status", slug], check=False)
         return
 
@@ -109,7 +109,7 @@ def main() -> None:
     shard_jsons: list[Path] = []
 
     for idx in range(args.shards):
-        slug = f"{username}/dm100-3d-{args.suite}-s{idx}of{args.shards}"
+        slug = f"{username}/dm100-3d-{args.suite}-shard-{idx}-{args.shards}"
         s_out = args.out_dir / f"shard_{idx}"
         s_out.mkdir(parents=True, exist_ok=True)
         subprocess.run([kaggle_exe, "kernels", "output", slug, "-p", str(s_out)], check=True)

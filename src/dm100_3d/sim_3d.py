@@ -781,7 +781,12 @@ class MuJoCoPlant3D:
                 return
 
             in_ground_contact = self.touchdown_time_s is not None or (
-                in_contact_zone and self.body.sample_contact().any_contact
+                in_contact_zone
+                and (
+                    self.body.sample_contact().any_contact
+                    or float(p_after[2]) - mp.cg_station_m
+                    <= -self.vehicle.landing_gear.foot_station_m + 0.05
+                )
             )
             self.max_q_pa = max(self.max_q_pa, ft.dynamic_pressure_pa)
             self.max_heat_flux_w_m2 = max(self.max_heat_flux_w_m2, ft.heat_flux_w_m2)
@@ -801,12 +806,13 @@ class MuJoCoPlant3D:
                 )
                 self.max_roll_deg = max(self.max_roll_deg, abs(degrees(roll_angle_rad(q_after))))
 
-            self.max_rate_deg_s = max(self.max_rate_deg_s, degrees(float(np.linalg.norm(om_after))))
             ang_acc = degrees(float(np.linalg.norm((om_after - self._prev_omega_b) / dt)))
-            if (not in_ground_contact) and (
-                self.separation_time_s is None or self.time_s > self.separation_time_s + 0.20
-            ):
-                self.max_accel_deg_s2 = max(self.max_accel_deg_s2, ang_acc)
+            if not in_ground_contact:
+                self.max_rate_deg_s = max(
+                    self.max_rate_deg_s, degrees(float(np.linalg.norm(om_after)))
+                )
+                if self.separation_time_s is None or self.time_s > self.separation_time_s + 0.20:
+                    self.max_accel_deg_s2 = max(self.max_accel_deg_s2, ang_acc)
             self._prev_omega_b = om_after.copy()
             self.max_gimbal_deg = max(
                 self.max_gimbal_deg, degrees(hypot(self.gimbal[0], self.gimbal[1]))

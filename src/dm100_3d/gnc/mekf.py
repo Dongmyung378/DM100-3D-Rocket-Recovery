@@ -296,7 +296,7 @@ class CausalEstimator3D:
 
         # Low-pass filter bias-corrected angular rate for smooth derivative control
         om_now = om_meas - self.b_g
-        alpha_om = 0.65 if self.sensor_config.gyro_noise_deg_s > 0.0 else 1.0
+        alpha_om = 0.45 if self.sensor_config.gyro_noise_deg_s > 0.0 else 1.0
         self._last_omega_filt += alpha_om * (om_now - self._last_omega_filt)
         om_out = self._last_omega_filt
 

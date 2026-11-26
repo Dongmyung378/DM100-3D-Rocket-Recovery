@@ -89,7 +89,7 @@ def main() -> None:
     kaggle_exe = None if args.dry_run else _resolve_kaggle_cli()
 
     for idx in range(args.shards):
-        slug = f"dm100-3d-{args.suite}-s{idx}of{args.shards}"
+        slug = f"dm100-3d-{args.suite}-shard-{idx}-{args.shards}"
         sdir = args.stage_dir / slug
         sdir.mkdir(parents=True, exist_ok=True)
         script_path = sdir / "run_shard.py"
@@ -105,7 +105,7 @@ def main() -> None:
         )
         meta = {
             "id": f"{username}/{slug}",
-            "title": f"DM100 3D {args.suite} Shard {idx}/{args.shards}",
+            "title": f"DM100 3D {args.suite} Shard {idx}-{args.shards}",
             "code_file": "run_shard.py",
             "language": "python",
             "kernel_type": "script",

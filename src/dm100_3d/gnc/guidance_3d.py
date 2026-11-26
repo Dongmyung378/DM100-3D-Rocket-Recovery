@@ -199,6 +199,7 @@ class RtlsController3D:
         self._vb_wind_trim_xy: NDArray[np.float64] = np.zeros(2, dtype=np.float64)
         self._eb_steer_xy_deg: NDArray[np.float64] = np.zeros(2, dtype=np.float64)
         self._glide_alpha_xy_deg: NDArray[np.float64] = np.zeros(2, dtype=np.float64)
+        self.cached_drag_scale: float = 1.0
         self.last_iip_time_s: float = -1e9
         self.last_peak_q_time_s: float = -1e9
         self.cached_iip_xy_m: tuple[float, float] = (0.0, 0.0)
@@ -357,8 +358,33 @@ class RtlsController3D:
 
         bx, by = 0.0, 0.0
         if use_nav_bias and est.engine_throttle < 0.02 and z < 10_000.0:
-            bx = max(-1.6, min(1.6, est.accel_bias_world_m_s2[0]))
-            by = max(-1.6, min(1.6, est.accel_bias_world_m_s2[1]))
+            # Gate horizontal accel-bias by small body AoA (mirrors 2D): prevents high-AoA
+            # lift-scale residuals from creating positive-feedback IIP runaway in thin air.
+            r_wb0 = quat_to_rotmat(est.quat_wxyz)
+            v_air0 = self._air_vel(est)
+            v_air_b0 = r_wb0.T @ v_air0
+            v_perp0 = hypot(float(v_air_b0[0]), float(v_air_b0[1]))
+            alpha_b0_deg = degrees(atan2(v_perp0, max(-float(v_air_b0[2]), 1.0)))
+            zero_aoa_w = max(0.0, 1.0 - alpha_b0_deg / 7.0)
+            bx = zero_aoa_w * max(-1.6, min(1.6, est.accel_bias_world_m_s2[0]))
+            by = zero_aoa_w * max(-1.6, min(1.6, est.accel_bias_world_m_s2[1]))
+
+        drag_scale_est = 1.0
+        if use_nav_bias and est.engine_throttle < 0.02 and z < 22_000.0:
+            t0_k, _, rho0 = self.forecast_atmo.at(z)
+            wx0, wy0, _ = self.forecast_wind.at(z, t)
+            spd0 = sqrt((vx - wx0) ** 2 + (vy - wy0) ** 2 + vz * vz)
+            q0 = 0.5 * rho0 * spd0 * spd0
+            if q0 > 1_500.0 and vz < -50.0:
+                m0 = spd0 / sqrt(1.4 * R_AIR * t0_k)
+                c0 = 1.0 + tdr * exp(-(((m0 - 1.0) / 0.2) ** 2))
+                f_nom_z = q0 * (c0 * cd_desc * ax_area + fin_area_eff * fin_cd0) * (-vz / spd0)
+                a_nom_z = f_nom_z / max(mass, 1.0)
+                if a_nom_z > 2.5:
+                    drag_scale_est = max(
+                        0.75, min(1.35, 1.0 + est.accel_bias_world_m_s2[2] / a_nom_z)
+                    )
+                    self.cached_drag_scale = drag_scale_est
 
         while z > handoff_z_m and elapsed < 580.0:
             step = dt
@@ -380,7 +406,7 @@ class RtlsController3D:
                 if (not boosting and z < self.settings.fin_deploy_altitude_m and vz < 0.0)
                 else 0.0
             )
-            drag = q * (corr * cd_desc * ax_area + fin_d)
+            drag = drag_scale_est * q * (corr * cd_desc * ax_area + fin_d)
             inv_s = 1.0 / max(spd, 1.0)
             fx = -drag * (rx * inv_s)
             fy = -drag * (ry * inv_s)
@@ -518,7 +544,7 @@ class RtlsController3D:
             prev_t, prev_val = lim, val
         dur = root if root is not None else 28.0
 
-        # Refine direction once at solved duration to kill residual crossrange drift
+        # Refine 2D direction using exact residual vector (sign-consistent across all 360 deg)
         xi_r, yi_r, _ = self._predict_rtls_iip_3d(
             est,
             dur,
@@ -526,16 +552,34 @@ class RtlsController3D:
             include_entry_burn=True,
             handoff_z_m=self.settings.glide_handoff_altitude_m,
         )
-        res_y = yi_r - float(target_xy[1])
-        if dur > 1.0 and abs(res_y) > 40.0:
-            # Small heading trim opposing crossrange residual
-            yaw_corr = max(-0.22, min(0.22, -res_y / max(miss_dist0, 2_000.0)))
-            c_y, s_y = cos(yaw_corr), sin(yaw_corr)
-            self.boost_dir_xy = np.array(
-                [c_y * b_dir[0] - s_y * b_dir[1], s_y * b_dir[0] + c_y * b_dir[1]],
-                dtype=np.float64,
-            )
-            self.boost_dir_xy /= float(np.linalg.norm(self.boost_dir_xy))
+        res_vec = np.array([xi_r, yi_r], dtype=np.float64) - target_xy
+        res_norm = float(np.linalg.norm(res_vec))
+        if dur > 1.0 and res_norm > 40.0:
+            eff_miss = miss_vec0 + 0.85 * res_vec
+            eff_norm = float(np.linalg.norm(eff_miss))
+            if eff_norm > 1e-6:
+                b_new = -eff_miss / eff_norm
+                # Limit per-replan azimuth step to 0.30 rad for smooth attitude tracking
+                dot_b = max(-1.0, min(1.0, float(b_dir @ b_new)))
+                cross_b = float(b_dir[0] * b_new[1] - b_dir[1] * b_new[0])
+                d_ang = max(-0.30, min(0.30, atan2(cross_b, dot_b)))
+                c_y, s_y = cos(d_ang), sin(d_ang)
+                b_dir = np.array(
+                    [c_y * b_dir[0] - s_y * b_dir[1], s_y * b_dir[0] + c_y * b_dir[1]],
+                    dtype=np.float64,
+                )
+                b_dir /= float(np.linalg.norm(b_dir))
+                self.boost_dir_xy = b_dir
+                if res_norm > 150.0:
+                    cache.clear()
+                    prev_t = 0.0
+                    prev_val = eval_proj(0.0)
+                    for lim in (4.0, 10.0, 18.0, 28.0, 40.0, 54.0, 70.0):
+                        val = eval_proj(lim)
+                        if prev_val * val <= 0.0:
+                            dur = float(brentq(eval_proj, prev_t, lim, xtol=0.02, maxiter=20))
+                            break
+                        prev_t, prev_val = lim, val
 
         self.boost_end_s = est.time_s + dur
         self.next_replan_s = est.time_s + self.settings.boostback_replan_period_s
@@ -667,7 +711,22 @@ class RtlsController3D:
                 rcs_deadband_nm=rcs_deadband_nm,
             )
         )
-        return out.gimbal_rad, out.rcs_torque_body_nm, out.fin_deflection_rad
+        # Guard pre-separation RCS torque against lighter post-separation booster inertia
+        rcs_cmd = out.rcs_torque_body_nm
+        if est.upper_attached and self.cutoff_pending:
+            mp_sep = mass_properties_3d(
+                mass - self.vehicle.upper_stage.total_mass_kg,
+                est.gear_extension,
+                vehicle=self.vehicle,
+                upper_attached=False,
+            )
+            lims_sep = [i_s * radians(2.0) for i_s in mp_sep.inertia_diag_kg_m2]
+            rcs_cmd = (
+                max(-lims_sep[0], min(lims_sep[0], rcs_cmd[0])),
+                max(-lims_sep[1], min(lims_sep[1], rcs_cmd[1])),
+                max(-lims_sep[2], min(lims_sep[2], rcs_cmd[2])),
+            )
+        return out.gimbal_rad, rcs_cmd, out.fin_deflection_rad
 
     def _compute_hoverslam_ignition_height(self, est: EstimatedState3D, mass: float) -> float:
         s = self.settings
@@ -679,8 +738,10 @@ class RtlsController3D:
         g_loc = fast_gravity(est.pos_enu_m[2])
         _, p_pa, rho = self.forecast_atmo.at(min(max(est.pos_enu_m[2], 0.0), 3_000.0))
         r = self.vehicle.geometry.body_radius_m
-        cda = self.vehicle.aerodynamics.axial_cd_descent * (pi * r * r) + (
-            self.vehicle.fins.base_drag_coefficient * 0.5 * self.vehicle.fins.installed_area_m2
+        drag_eff = min(1.0, max(0.75, self.cached_drag_scale))
+        cda = drag_eff * (
+            self.vehicle.aerodynamics.axial_cd_descent * (pi * r * r)
+            + self.vehicle.fins.base_drag_coefficient * 0.5 * self.vehicle.fins.installed_area_m2
         )
 
         t_lag = (
@@ -770,7 +831,7 @@ class RtlsController3D:
         ):
             self.cutoff_pending = True
 
-        # 3D Gravity Turn: pitch in XZ corridor + zero crossrange AoA along Y
+        # 3D Gravity Turn: pitch in XZ corridor + inertial zero-crossrange centering along Y
         flow_x = atan2(float(v_air[0]), max(float(v_air[2]), 1.0)) if speed > 20.0 else 0.0
         flow_y = atan2(float(v_air[1]), max(float(v_air[2]), 1.0)) if speed > 20.0 else 0.0
         flow_inert_x = (
@@ -778,23 +839,28 @@ class RtlsController3D:
             if est.vel_enu_m_s[2] > 20.0
             else 0.0
         )
+        flow_inert_y = (
+            atan2(est.vel_enu_m_s[1], max(est.vel_enu_m_s[2], 1.0))
+            if est.vel_enu_m_s[2] > 20.0
+            else 0.0
+        )
 
-        wx_1k, _, _ = self.forecast_wind.at(1_000.0, 0.0)
-        wx_4k, _, _ = self.forecast_wind.at(4_000.0, 0.0)
+        wx_1k, wy_1k, _ = self.forecast_wind.at(1_000.0, 0.0)
+        wx_4k, wy_4k, _ = self.forecast_wind.at(4_000.0, 0.0)
         kick_deg = max(3.5, min(9.5, s.final_pitch_deg + 0.16 * (0.65 * wx_1k + 0.35 * wx_4k)))
+        kick_y_deg = max(-3.0, min(3.0, 0.16 * (0.65 * wy_1k + 0.35 * wy_4k)))
         t_kick_end = s.pitch_start_s + s.pitch_duration_s
         if est.time_s < s.pitch_start_s:
             pitch_x = 0.0
             pitch_y = 0.0
         elif est.time_s < t_kick_end:
-            pitch_x = radians(kick_deg) * _smoothstep(
-                (est.time_s - s.pitch_start_s) / s.pitch_duration_s
-            )
-            pitch_y = 0.0
+            u_k = _smoothstep((est.time_s - s.pitch_start_s) / s.pitch_duration_s)
+            pitch_x = radians(kick_deg) * u_k
+            pitch_y = radians(kick_y_deg) * u_k
         else:
             gt_blend = _smoothstep((est.time_s - t_kick_end) / 4.0)
             pitch_x = (1.0 - gt_blend) * radians(kick_deg) + gt_blend * flow_inert_x
-            pitch_y = gt_blend * flow_y
+            pitch_y = (1.0 - gt_blend) * radians(kick_y_deg) + gt_blend * flow_inert_y
             if est.pos_enu_m[2] > 10_000.0:
                 rem = max(0.0, est.main_propellant_kg - ag.separation_min_main_propellant_kg)
                 tot_burn = max(
@@ -808,16 +874,22 @@ class RtlsController3D:
                 pitch_x = flow_inert_x + max(
                     -trim_lim, min(trim_lim, 1.60 * (target_gt - flow_inert_x))
                 )
+                pitch_y = flow_inert_y + max(-trim_lim, min(trim_lim, 1.60 * (0.0 - flow_inert_y)))
 
-        # Protect Max-Q structural q*alpha bound
+        # Protect 3D Max-Q structural q * total_alpha bound with circular norm clamp
         if q_pa > 100.0:
             dep = _smoothstep((est.vel_enu_m_s[2] - 40.0) / 60.0)
             ang_budget = 16.0 - 13.5 * _smoothstep((q_pa - 2_500.0) / 5_500.0)
             allow = radians(
                 min(ang_budget, 0.55 * self.vehicle.safety.max_q_alpha_kpa_deg * 1_000.0 / q_pa)
             )
-            pitch_x = max(dep * flow_x - allow, min(dep * flow_x + allow, pitch_x))
-            pitch_y = max(dep * flow_y - allow, min(dep * flow_y + allow, pitch_y))
+            dx_a = pitch_x - dep * flow_x
+            dy_a = pitch_y - dep * flow_y
+            d_norm = hypot(dx_a, dy_a)
+            if d_norm > allow and d_norm > 1e-12:
+                sc_a = allow / d_norm
+                pitch_x = dep * flow_x + dx_a * sc_a
+                pitch_y = dep * flow_y + dy_a * sc_a
 
         time_to_res = (
             est.main_propellant_kg - ag.separation_min_main_propellant_kg - shutdown_res
@@ -1460,12 +1532,21 @@ class RtlsController3D:
 
             if self.phase == "coast":
                 q_des = pointing_dir_to_quat_wxyz(self._retro_dir(self._air_vel(est), 260.0))
+                q_ce = quat_multiply_wxyz(quat_conjugate_wxyz(est.quat_wxyz), q_des)
+                c_err_deg = degrees(
+                    2.0 * atan2(float(np.linalg.norm(q_ce[1:4])), abs(float(q_ce[0])))
+                )
+                coast_db = (
+                    2_500.0
+                    if (q_pa < 100.0 and c_err_deg < 1.5)
+                    else (150.0 if q_pa < 100.0 else 0.0)
+                )
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
                     0.0,
                     allow_fin=deploy_fins,
-                    rcs_deadband_nm=150.0 if q_pa < 100.0 else 0.0,
+                    rcs_deadband_nm=coast_db,
                 )
                 cmd = ActuatorCommand3D(
                     gimbal_rad=gim,
