@@ -597,6 +597,7 @@ class RtlsController3D:
         rcs_deadband_nm: float = 0.0,
         high_q_guard: bool = True,
         accel_guard_deg_s2: float = 3.5,
+        use_xy_torque_bias: bool = False,
     ) -> tuple[tuple[float, float], tuple[float, float, float], tuple[float, float, float, float]]:
         """3-axis quaternion attitude controller -> PriorityControlAllocator3D (3x9)."""
         s = self.settings
@@ -664,7 +665,10 @@ class RtlsController3D:
         # Gyroscopic coupling feedforward: omega x (I * omega)
         i_vec = np.asarray(i_low, dtype=np.float64)
         gyro_ff = np.cross(om_b, i_vec * om_b)
-        tb = np.asarray(est.torque_bias_body_nm, dtype=np.float64)
+        tb = np.asarray(est.torque_bias_body_nm, dtype=np.float64).copy()
+        if not use_xy_torque_bias:
+            tb[0] = 0.0
+            tb[1] = 0.0
         req_tau = i_vec * des_alpha + gyro_ff - btau_b - tb
         bg_tau = btau_b - gyro_ff + tb
 
@@ -1351,6 +1355,7 @@ class RtlsController3D:
             thrust_tilt_cmd_body_xy=thrust_tilt_body_xy,
             high_q_guard=False,
             accel_guard_deg_s2=vb_acc if vertical_body else 3.05,
+            use_xy_torque_bias=(not vertical_body),
         )
         if est.engine_throttle < lit_thr:
             gim = (0.0, 0.0)
@@ -1694,6 +1699,7 @@ class RtlsController3D:
                     rate_limit_deg_s=6.5,
                     accel_limit_deg_s2=1.6,
                     allow_fin=True,
+                    use_xy_torque_bias=(eb_el > 1.2),
                 )
                 cmd = ActuatorCommand3D(
                     throttle_cmd=throttle,
@@ -1788,6 +1794,7 @@ class RtlsController3D:
                     if (q_pa > 1_000.0 and est.fin_extension >= 0.4)
                     else 0.0,
                     accel_guard_deg_s2=2.3,
+                    use_xy_torque_bias=True,
                 )
                 cmd = ActuatorCommand3D(
                     throttle_cmd=0.0,

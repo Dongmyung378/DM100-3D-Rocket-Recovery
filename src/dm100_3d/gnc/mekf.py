@@ -136,7 +136,7 @@ class CausalEstimator3D:
         self.command_history: deque[tuple[float, ActuatorCommand3D]] = deque(maxlen=64)
         self.torque_bias_body_nm: NDArray[np.float64] = np.zeros(3, dtype=np.float64)
         self._last_omega_filt: NDArray[np.float64] = np.zeros(3, dtype=np.float64)
-        self._prev_ang_sample: tuple[float, NDArray[np.float64], NDArray[np.float64]] | None = None
+        self._prev_ang_sample: tuple | None = None
         self._sep_time_s: float | None = None
 
     def record_command(self, time_s: float, cmd: ActuatorCommand3D) -> None:
@@ -366,7 +366,18 @@ class CausalEstimator3D:
             mass, pkt.gear_extension, vehicle=self.vehicle, upper_attached=False
         )
         i_vec = np.asarray(mp.inertia_diag_kg_m2, dtype=np.float64)
-        cur = (pkt.measurement_time_s, om_b.copy(), i_vec.copy())
+        cur = (
+            pkt.measurement_time_s,
+            om_b.copy(),
+            i_vec.copy(),
+            q_wxyz.copy(),
+            self.p.copy(),
+            self.v.copy(),
+            max(0.0, min(1.0, pkt.engine_throttle)),
+            pkt.gimbal_rad,
+            pkt.fin_deflection_rad,
+            pkt.fin_extension,
+        )
         prev = self._prev_ang_sample
         if prev is not None and pkt.measurement_time_s <= prev[0] + 1e-9:
             return
@@ -381,47 +392,57 @@ class CausalEstimator3D:
         # Average executed RCS command over [prev_t, meas_t]
         rcs_avg = np.zeros(3, dtype=np.float64)
         if self.command_history and pkt.rcs_propellant_kg > 0.0:
-            # Find most recent executed command covering measurement_time_s
             for end_t, cmd in reversed(self.command_history):
                 if end_t - self.control_dt_s <= pkt.measurement_time_s + 1e-9:
                     rcs_avg = np.asarray(cmd.rcs_torque_nm, dtype=np.float64)
                     break
 
         om_mid = 0.5 * (prev[1] + om_b)
+        q_aligned = q_wxyz if float(prev[3] @ q_wxyz) >= 0.0 else -q_wxyz
+        q_mid = normalize_quat_wxyz(prev[3] + q_aligned, canonical=True)
+        p_mid = 0.5 * (prev[4] + self.p)
+        v_mid = 0.5 * (prev[5] + self.v)
+        thr_mid = 0.5 * (prev[6] + cur[6])
+        gim_mid = (0.5 * (prev[7][0] + cur[7][0]), 0.5 * (prev[7][1] + cur[7][1]))
+        fin_mid = tuple(0.5 * (prev[8][k] + cur[8][k]) for k in range(4))
+        fext_mid = 0.5 * (prev[9] + cur[9])
+
         ft = compute_forces_and_torques_3d(
-            altitude_m=float(self.p[2]),
-            vel_enu_m_s=self.v,
-            quat_wxyz=q_wxyz,
+            altitude_m=float(p_mid[2]),
+            vel_enu_m_s=v_mid,
+            quat_wxyz=q_mid,
             omega_body_rad_s=om_mid,
             cg_station_m=mp.cg_station_m,
-            throttle_actual=max(0.0, min(1.0, pkt.engine_throttle)),
-            gimbal_rad=pkt.gimbal_rad,
+            throttle_actual=thr_mid,
+            gimbal_rad=gim_mid,
             rcs_torque_body_nm=(float(rcs_avg[0]), float(rcs_avg[1]), float(rcs_avg[2])),
-            fin_deflection_rad=pkt.fin_deflection_rad,
-            fin_extension=pkt.fin_extension,
+            fin_deflection_rad=(fin_mid[0], fin_mid[1], fin_mid[2], fin_mid[3]),
+            fin_extension=fext_mid,
             atmo_lut=self.forecast_atmo,
             wind_lut=self.forecast_wind,
             time_s=0.5 * (prev[0] + pkt.measurement_time_s),
             vehicle=self.vehicle,
             upper_attached=False,
         )
-        # Estimate roll disturbance torque causally (small Izz makes roll sensitive to
-        # external torques, while pitch/yaw differentiation amplifies gyro noise by Ixx >> Izz).
-        tau_roll_nom = float(ft.torque_body_nm[2])
-        d_lz_dt = (float(i_vec[2]) * float(om_b[2]) - float(prev[2][2]) * float(prev[1][2])) / dt
-        # Cross-coupling term (Iyy - Ixx) * om_x * om_y == 0 for axisymmetric booster
-        res_roll = max(-12_000.0, min(12_000.0, d_lz_dt - tau_roll_nom))
-        alpha_roll = 1.0 - exp(-dt / 0.10)
-        self.torque_bias_body_nm[0] = 0.0
-        self.torque_bias_body_nm[1] = 0.0
-        self.torque_bias_body_nm[2] = max(
-            -12_000.0,
-            min(
-                12_000.0,
-                float(self.torque_bias_body_nm[2])
-                + alpha_roll * (res_roll - float(self.torque_bias_body_nm[2])),
-            ),
+        # 3-axis causal disturbance torque observer (mirrors DM100 2D estimator.py):
+        #   - X/Y pitch/yaw: rejects unmodeled wind-error & gust aero moments (tau = 0.18 s)
+        #   - Z roll: rejects external roll pulses with fast response (tau = 0.10 s)
+        i_mid = 0.5 * (prev[2] + i_vec)
+        d_l_dt = (i_vec * om_b - prev[2] * prev[1]) / dt + np.cross(om_mid, i_mid * om_mid)
+        res_3 = d_l_dt - np.asarray(ft.torque_body_nm, dtype=np.float64)
+        tau_xy = 0.26 if self.sensor_config.gyro_noise_deg_s > 0.0 else 0.14
+        alphas = (
+            1.0 - exp(-dt / tau_xy),
+            1.0 - exp(-dt / tau_xy),
+            1.0 - exp(-dt / 0.10),
         )
+        bounds = (120_000.0, 120_000.0, 12_000.0)
+        for ax_i in range(3):
+            r_c = max(-bounds[ax_i], min(bounds[ax_i], float(res_3[ax_i])))
+            upd = float(self.torque_bias_body_nm[ax_i]) + alphas[ax_i] * (
+                r_c - float(self.torque_bias_body_nm[ax_i])
+            )
+            self.torque_bias_body_nm[ax_i] = max(-bounds[ax_i], min(bounds[ax_i], upd))
 
     def reset_for_separation(
         self, p_new: NDArray[np.float64], v_new: NDArray[np.float64], time_s: float = 0.0
