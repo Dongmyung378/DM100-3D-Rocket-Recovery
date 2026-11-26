@@ -75,6 +75,8 @@ def compute_body_aero_3d(
     drag_scale: float = 1.0,
     upper_attached: bool = False,
     body_offset_body_m: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    axial_drag_multiplier: float = 1.0,
+    cp_shift_m: float = 0.0,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], float, float, float, float, float]:
     """Compute 3D body aero (f_world_n, tau_body_nm, q_pa, heat_w_m2, mach, alpha_deg, phi_deg)."""
     t_k, _, rho = atmo_lut.at(altitude_m)
@@ -104,6 +106,10 @@ def compute_body_aero_3d(
     ascending_flow = vz_b >= 0.0 or upper_attached
     axial_cd = aero.axial_cd_ascent if ascending_flow else aero.axial_cd_descent
     cp_m = aero.pressure_center_ascent_m if ascending_flow else aero.pressure_center_descent_m
+    if axial_drag_multiplier != 1.0:
+        axial_cd *= axial_drag_multiplier
+    if cp_shift_m != 0.0:
+        cp_m += cp_shift_m
 
     scale = -0.5 * rho * corr * drag_scale
     fz_b = scale * axial_cd * axial_area * abs(vz_b) * vz_b
@@ -321,6 +327,8 @@ def compute_forces_and_torques_3d(
     drag_scale: float = 1.0,
     delivered_ratio: float = 1.0,
     body_offset_body_m: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    axial_drag_multiplier: float = 1.0,
+    cp_shift_m: float = 0.0,
 ) -> ForceTorqueSample3D:
     """Evaluate all pure 3D external forces [N] (ENU world) and torques [N*m] (body frame)."""
     rot_wb = quat_to_rotmat(quat_wxyz)
@@ -353,6 +361,8 @@ def compute_forces_and_torques_3d(
         drag_scale=drag_scale,
         upper_attached=upper_attached,
         body_offset_body_m=body_offset_body_m,
+        axial_drag_multiplier=axial_drag_multiplier,
+        cp_shift_m=cp_shift_m,
     )
     ff_w, ftau_b, hinges = compute_fins_aero_3d(
         altitude_m=altitude_m,

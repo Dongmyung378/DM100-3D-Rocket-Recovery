@@ -20,12 +20,15 @@ dependencies = [
 [project.optional-dependencies]
 assets = ["trimesh>=4.4,<5"]
 kaggle = ["kaggle>=1.6,<2", "six>=1.16"]
+viz = ["Pillow>=10.0,<13", "matplotlib>=3.8,<4"]
 dev = [
     "pytest>=8,<9",
     "ruff>=0.6,<1",
     "trimesh>=4.4,<5",
     "kaggle>=1.6,<2",
     "six>=1.16",
+    "Pillow>=10.0,<13",
+    "matplotlib>=3.8,<4",
 ]
 
 [project.urls]

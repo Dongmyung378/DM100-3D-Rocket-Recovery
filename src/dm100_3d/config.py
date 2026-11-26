@@ -235,11 +235,177 @@ class DM100VehicleConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DualTankGeometry:
+    """Common-bulkhead LOX (upper) + CH4 (lower) dual-tank specification (CDR Rev 3.1)."""
+
+    tank_inner_radius_m: float = 1.50
+    of_ratio: float = 3.6
+    lox_density_kg_m3: float = 1_141.0
+    ch4_density_kg_m3: float = 422.0
+    ch4_bottom_m: float = 2.60
+    lox_bottom_m: float = 9.20
+    ch4_tank_volume_m3: float = 39.0
+    lox_tank_volume_m3: float = 52.0
+    common_bulkhead_dome_depth_m: float = 1.061
+    ring_baffle_zeta0: float = 0.080
+    ring_baffle_kb: float = 0.08
+    ring_baffle_eps_rad: float = 1e-3
+
+    @property
+    def total_tank_volume_m3(self) -> float:
+        return self.ch4_tank_volume_m3 + self.lox_tank_volume_m3
+
+    @property
+    def lox_mass_fraction(self) -> float:
+        return self.of_ratio / (1.0 + self.of_ratio)
+
+    @property
+    def bulk_propellant_density_kg_m3(self) -> float:
+        f_lox = self.lox_mass_fraction
+        f_ch4 = 1.0 - f_lox
+        return 1.0 / (f_lox / self.lox_density_kg_m3 + f_ch4 / self.ch4_density_kg_m3)
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicsV2Config:
+    """Independent toggle flags for all DM100 3D v2 high-fidelity physics modules.
+
+    All booleans default to `False` so legacy DM100 3D v1.0 behavior is reproduced bit-for-bit.
+    """
+
+    # M1 (Phase 7A)
+    earth_wgs84_j2: bool = False
+    dual_tank_slosh: bool = False
+    srp_interference: bool = False
+    ground_effect: bool = False
+
+    # M2/M3 (Phase 7B+)
+    flex_body: bool = False
+    dryden_turbulence: bool = False
+    sloped_pad: bool = False
+    sensors_v2: bool = False
+    faults_v2: bool = False
+
+    # Dispersion / model parameters (neutral defaults)
+    srp_shield_scale: float = 1.0
+    srp_buffet_enabled: bool = True
+    srp_cm_rms_peak: float = 0.0055
+    ground_effect_coeff: float = 0.07
+    ground_effect_lat_coeff: float = 0.25
+    slosh_baffle_damping_scale: float = 1.0
+    booster_dry_mass_scale: float = 1.0
+    dual_tank_geometry: DualTankGeometry = field(default_factory=DualTankGeometry)
+
+    def any_enabled(self) -> bool:
+        return any(
+            (
+                self.earth_wgs84_j2,
+                self.dual_tank_slosh,
+                self.srp_interference,
+                self.ground_effect,
+                self.flex_body,
+                self.dryden_turbulence,
+                self.sloped_pad,
+                self.sensors_v2,
+                self.faults_v2,
+            )
+        )
+
+    @classmethod
+    def m1_preset(cls) -> PhysicsV2Config:
+        """Enable all Phase 7A (M1) high-fidelity physics modules."""
+        return cls(
+            earth_wgs84_j2=True,
+            dual_tank_slosh=True,
+            srp_interference=True,
+            ground_effect=True,
+        )
+
+    @classmethod
+    def full_v2(cls) -> PhysicsV2Config:
+        """Enable the full DM100 3D v2 high-fidelity physics stack."""
+        return cls(
+            earth_wgs84_j2=True,
+            dual_tank_slosh=True,
+            srp_interference=True,
+            ground_effect=True,
+            flex_body=True,
+            dryden_turbulence=True,
+            sloped_pad=True,
+            sensors_v2=True,
+            faults_v2=True,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class GncV2Config:
+    """Paired GNC v2 toggle flags (all `False` by default for bit-exact v1 legacy equivalence)."""
+
+    # M1 causal physics alignment
+    use_wgs84_gravity: bool = False
+    use_dual_tank_mass_props: bool = False
+    use_srp_iip_feedforward: bool = False
+    use_ground_effect_feedforward: bool = False
+
+    # M2/M3 GNC upgrades
+    use_structural_filter: bool = False
+    use_strapdown_mekf: bool = False
+    use_online_mpc: bool = False
+    use_fdir_v2: bool = False
+
+    # Strictly causal nominal feedforward constants (never see hidden plant dispersions)
+    srp_nominal_eta: float = 0.40
+    ground_effect_nominal_coeff: float = 0.06
+    dual_tank_geometry: DualTankGeometry = field(default_factory=DualTankGeometry)
+
+    @classmethod
+    def m1_preset(cls) -> GncV2Config:
+        """Enable causal M1 physics models inside GNC/MEKF."""
+        return cls(
+            use_wgs84_gravity=True,
+            use_dual_tank_mass_props=True,
+            use_srp_iip_feedforward=True,
+            use_ground_effect_feedforward=True,
+        )
+
+    @classmethod
+    def full_v2(cls) -> GncV2Config:
+        """Enable all DM100 3D v2 GNC upgrades."""
+        return cls(
+            use_wgs84_gravity=True,
+            use_dual_tank_mass_props=True,
+            use_srp_iip_feedforward=True,
+            use_ground_effect_feedforward=True,
+            use_structural_filter=True,
+            use_strapdown_mekf=True,
+            use_online_mpc=True,
+            use_fdir_v2=True,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class MassProperties3D:
     total_mass_kg: float
     cg_station_m: float
     inertia_diag_kg_m2: tuple[float, float, float]
     fuel_height_m: float
+
+
+def dual_tank_propellant_levels(
+    main_propellant_kg: float,
+    geom: DualTankGeometry | None = None,
+) -> tuple[float, float, float, float, float, float]:
+    """Return `(m_lox, h_lox, cg_lox, m_ch4, h_ch4, cg_ch4)` for common-bulkhead LOX/CH4 tanks."""
+    dtg = geom or DualTankGeometry()
+    main = max(0.0, float(main_propellant_kg))
+    area = pi * dtg.tank_inner_radius_m * dtg.tank_inner_radius_m
+    m_lox = main * dtg.lox_mass_fraction
+    m_ch4 = main - m_lox
+    h_lox = m_lox / (dtg.lox_density_kg_m3 * area)
+    h_ch4 = m_ch4 / (dtg.ch4_density_kg_m3 * area)
+    cg_lox = dtg.lox_bottom_m + 0.5 * h_lox
+    cg_ch4 = dtg.ch4_bottom_m + 0.5 * h_ch4
+    return (m_lox, h_lox, cg_lox, m_ch4, h_ch4, cg_ch4)
 
 
 def mass_properties_3d(
@@ -250,17 +416,23 @@ def mass_properties_3d(
     upper_attached: bool = False,
     airframe_mass_offset_kg: float = 0.0,
     inertia_scale: float = 1.0,
+    inertia_roll_scale: float | None = None,
+    dual_tank: bool = False,
+    rcs_propellant_kg: float | None = None,
+    dual_tank_geom: DualTankGeometry | None = None,
 ) -> MassProperties3D:
     """Compute exact 3D mass, COM station, and diagonal inertia (Ixx, Iyy, Izz).
 
-    Pitch/yaw inertia (Ixx = Iyy) matches DM100 2D `fast_mass_properties` bit-for-bit.
-    Roll inertia (Izz) sums cylindrical/ring inertia of all booster/upper components about +z_b.
+    When `dual_tank=False` (default), reproduces DM100 3D v1.0 (and DM100 2D in XZ) bit-for-bit.
+    When `dual_tank=True`, separates upper LOX (`z=9.20 m`) and lower CH4 (`z=2.60 m`) tanks plus
+    dedicated RCS propellant at `rcs_station_m=22.4 m`.
     """
     cfg = vehicle or DM100VehicleConfig()
     g = cfg.geometry
     gear = cfg.landing_gear
     fins = cfg.fins
     upper_mass = cfg.upper_stage.total_mass_kg
+    roll_sc = inertia_scale if inertia_roll_scale is None else inertia_roll_scale
 
     airframe_mass = g.airframe_mass_kg + airframe_mass_offset_kg
     fixed_dry = (
@@ -270,6 +442,125 @@ def mass_properties_3d(
         + fins.mass_kg
         + (upper_mass if upper_attached else 0.0)
     )
+
+    if dual_tank:
+        dtg = dual_tank_geom or DualTankGeometry()
+        avail_prop = max(0.0, total_mass_kg - fixed_dry)
+        if rcs_propellant_kg is None:
+            rcs_mass = min(cfg.propellant.rcs_propellant_kg, avail_prop)
+        else:
+            rcs_mass = max(0.0, min(float(rcs_propellant_kg), avail_prop))
+        main_prop = max(0.0, avail_prop - rcs_mass)
+
+        r = g.body_radius_m
+        r2 = r * r
+        r_in = dtg.tank_inner_radius_m
+        r_in2 = r_in * r_in
+        m_lox, h_lox, st_lox, m_ch4, h_ch4, st_ch4 = dual_tank_propellant_levels(main_prop, dtg)
+
+        dep = max(0.0, min(1.0, gear_extension))
+        gear_st = (1.0 - dep) * g.gear_retracted_station_m + dep * g.gear_deployed_station_m
+        gear_r = (1.0 - dep) * r + dep * (0.5 * gear.half_span_m)
+
+        m_eng = g.engine_mass_kg
+        s_eng = g.engine_station_m
+        i_eng = m_eng * ((2.0 * s_eng) ** 2 / 12.0 + g.nozzle_radius_m**2 / 4.0)
+        izz_eng = 0.5 * m_eng * (g.nozzle_radius_m**2)
+
+        s_air = g.airframe_station_m
+        i_air = airframe_mass * (g.body_length_m**2 / 12.0 + r2 / 4.0)
+        izz_air = airframe_mass * r2
+
+        m_gear = g.gear_mass_kg
+        i_gear = m_gear * (gear_r**2)
+        izz_gear = m_gear * (gear_r**2)
+
+        i_lox = m_lox * (h_lox * h_lox / 12.0 + r_in2 / 4.0)
+        izz_lox = 0.5 * m_lox * r_in2
+        i_ch4 = m_ch4 * (h_ch4 * h_ch4 / 12.0 + r_in2 / 4.0)
+        izz_ch4 = 0.5 * m_ch4 * r_in2
+
+        s_rcs = g.rcs_station_m
+        i_rcs = rcs_mass * (0.5 * r2)
+        izz_rcs = rcs_mass * r2
+
+        m_fin = fins.mass_kg
+        i_fin = m_fin * (fins.mean_mass_radius_m**2)
+        izz_fin = m_fin * (fins.mean_mass_radius_m**2)
+
+        tot = m_eng + airframe_mass + m_gear + m_lox + m_ch4 + rcs_mass + m_fin
+        mom = (
+            m_eng * s_eng
+            + airframe_mass * s_air
+            + m_gear * gear_st
+            + m_lox * st_lox
+            + m_ch4 * st_ch4
+            + rcs_mass * s_rcs
+            + m_fin * fins.station_m
+        )
+        if upper_attached:
+            tot += upper_mass
+            mom += upper_mass * g.upper_station_m
+        cg = mom / tot
+
+        i_lat = (
+            i_eng
+            + m_eng * (s_eng - cg) ** 2
+            + i_air
+            + airframe_mass * (s_air - cg) ** 2
+            + i_gear
+            + m_gear * (gear_st - cg) ** 2
+            + i_lox
+            + m_lox * (st_lox - cg) ** 2
+            + i_ch4
+            + m_ch4 * (st_ch4 - cg) ** 2
+            + i_rcs
+            + rcs_mass * (s_rcs - cg) ** 2
+            + i_fin
+            + m_fin * (fins.station_m - cg) ** 2
+        )
+        izz_booster = izz_eng + izz_air + izz_gear + izz_lox + izz_ch4 + izz_rcs + izz_fin
+
+        if upper_attached:
+            i_up = upper_mass * (g.upper_length_m**2 / 12.0 + r2 / 4.0)
+            izz_up = 0.5 * upper_mass * r2
+            booster_tot = tot - upper_mass
+            booster_cg = (mom - upper_mass * g.upper_station_m) / booster_tot
+            booster_i = (
+                i_eng
+                + m_eng * (s_eng - booster_cg) ** 2
+                + i_air
+                + airframe_mass * (s_air - booster_cg) ** 2
+                + i_gear
+                + m_gear * (gear_st - booster_cg) ** 2
+                + i_lox
+                + m_lox * (st_lox - booster_cg) ** 2
+                + i_ch4
+                + m_ch4 * (st_ch4 - booster_cg) ** 2
+                + i_rcs
+                + rcs_mass * (s_rcs - booster_cg) ** 2
+                + i_fin
+                + m_fin * (fins.station_m - booster_cg) ** 2
+            )
+            i_lat = (
+                i_lat
+                + (inertia_scale - 1.0) * booster_i
+                + i_up
+                + upper_mass * (g.upper_station_m - cg) ** 2
+            )
+            i_roll = roll_sc * izz_booster + izz_up
+        else:
+            i_lat *= inertia_scale
+            i_roll = roll_sc * izz_booster
+
+        return MassProperties3D(
+            total_mass_kg=float(tot),
+            cg_station_m=float(cg),
+            inertia_diag_kg_m2=(float(i_lat), float(i_lat), float(i_roll)),
+            fuel_height_m=float(h_lox + h_ch4),
+        )
+
+    # Exact legacy v1 homogeneous-tank branch (bit-for-bit untouched)
     fuel = max(0.0, total_mass_kg - fixed_dry)
 
     r = g.body_radius_m
@@ -350,10 +641,10 @@ def mass_properties_3d(
             + i_up
             + upper_mass * (g.upper_station_m - cg) ** 2
         )
-        i_roll = inertia_scale * izz_booster + izz_up
+        i_roll = roll_sc * izz_booster + izz_up
     else:
         i_lat *= inertia_scale
-        i_roll = inertia_scale * izz_booster
+        i_roll = roll_sc * izz_booster
 
     return MassProperties3D(
         total_mass_kg=float(tot),

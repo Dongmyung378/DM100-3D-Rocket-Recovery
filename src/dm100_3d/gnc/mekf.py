@@ -16,7 +16,7 @@ from math import exp, radians
 import numpy as np
 from numpy.typing import NDArray
 
-from dm100_3d.config import DM100VehicleConfig, mass_properties_3d
+from dm100_3d.config import DM100VehicleConfig, GncV2Config, MassProperties3D, mass_properties_3d
 from dm100_3d.coords import (
     axis_angle_to_quat_wxyz,
     normalize_quat_wxyz,
@@ -30,6 +30,8 @@ from dm100_3d.physics import (
     Wind3DLUT,
     compute_coriolis_and_centrifugal_3d,
     compute_forces_and_torques_3d,
+    wgs84_coriolis_and_transport_enu,
+    wgs84_normal_gravity,
 )
 from dm100_3d.plant_mujoco import fast_gravity
 
@@ -100,6 +102,7 @@ class CausalEstimator3D:
         planar_coriolis_only: bool = False,
         sensor_config: SensorConfig3D | None = None,
         control_dt_s: float = 0.02,
+        gnc_v2: GncV2Config | None = None,
     ) -> None:
         self.vehicle = vehicle
         self.forecast_atmo = forecast_atmo
@@ -109,6 +112,7 @@ class CausalEstimator3D:
         self.planar_coriolis_only = bool(planar_coriolis_only)
         self.sensor_config = sensor_config or SensorConfig3D()
         self.control_dt_s = float(control_dt_s)
+        self.gnc_v2 = gnc_v2 or GncV2Config()
 
         # Nominal MEKF state
         self.initialized: bool = False
@@ -151,16 +155,28 @@ class CausalEstimator3D:
             + (self.vehicle.upper_stage.total_mass_kg if pkt.upper_attached else 0.0)
         )
 
+    def _mass_props(
+        self, mass: float, gear_ext: float, upper_attached: bool, rcs_kg: float
+    ) -> MassProperties3D:
+        if self.gnc_v2.use_dual_tank_mass_props:
+            return mass_properties_3d(
+                mass,
+                gear_ext,
+                vehicle=self.vehicle,
+                upper_attached=upper_attached,
+                dual_tank=True,
+                rcs_propellant_kg=rcs_kg,
+                dual_tank_geom=self.gnc_v2.dual_tank_geometry,
+            )
+        return mass_properties_3d(
+            mass, gear_ext, vehicle=self.vehicle, upper_attached=upper_attached
+        )
+
     def _nominal_world_accel(
         self, pkt: TelemetryPacket3D, q_wxyz: NDArray[np.float64], omega_b: NDArray[np.float64]
     ) -> NDArray[np.float64]:
         mass = self._nominal_mass(pkt)
-        mp = mass_properties_3d(
-            mass,
-            pkt.gear_extension,
-            vehicle=self.vehicle,
-            upper_attached=pkt.upper_attached,
-        )
+        mp = self._mass_props(mass, pkt.gear_extension, pkt.upper_attached, pkt.rcs_propellant_kg)
         ft = compute_forces_and_torques_3d(
             altitude_m=float(self.p[2]),
             vel_enu_m_s=self.v,
@@ -178,16 +194,26 @@ class CausalEstimator3D:
             vehicle=self.vehicle,
             upper_attached=pkt.upper_attached,
         )
-        g_loc = fast_gravity(float(self.p[2]))
+        if self.gnc_v2.use_wgs84_gravity:
+            g_loc = wgs84_normal_gravity(self.latitude_deg, float(self.p[2]))
+            a_cor = wgs84_coriolis_and_transport_enu(
+                altitude_m=float(self.p[2]),
+                vel_enu_m_s=self.v,
+                latitude_deg=self.latitude_deg,
+                coriolis_enabled=self.coriolis_enabled,
+                planar_coriolis_only=self.planar_coriolis_only,
+            )
+        else:
+            g_loc = fast_gravity(float(self.p[2]))
+            a_cor = compute_coriolis_and_centrifugal_3d(
+                altitude_m=float(self.p[2]),
+                vel_enu_m_s=self.v,
+                latitude_deg=self.latitude_deg,
+                coriolis_enabled=self.coriolis_enabled,
+                planar_coriolis_only=self.planar_coriolis_only,
+            )
         if pkt.on_pad and pkt.upper_attached and ft.force_world_n[2] < mass * g_loc:
             return np.zeros(3, dtype=np.float64)
-        a_cor = compute_coriolis_and_centrifugal_3d(
-            altitude_m=float(self.p[2]),
-            vel_enu_m_s=self.v,
-            latitude_deg=self.latitude_deg,
-            coriolis_enabled=self.coriolis_enabled,
-            planar_coriolis_only=self.planar_coriolis_only,
-        )
         a_w = np.asarray(ft.force_world_n, dtype=np.float64) / mass + a_cor
         a_w[2] -= g_loc
         return a_w
@@ -362,9 +388,7 @@ class CausalEstimator3D:
             return
 
         mass = self._nominal_mass(pkt)
-        mp = mass_properties_3d(
-            mass, pkt.gear_extension, vehicle=self.vehicle, upper_attached=False
-        )
+        mp = self._mass_props(mass, pkt.gear_extension, False, pkt.rcs_propellant_kg)
         i_vec = np.asarray(mp.inertia_diag_kg_m2, dtype=np.float64)
         cur = (
             pkt.measurement_time_s,
