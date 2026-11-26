@@ -26,6 +26,8 @@ from dm100_3d.config import (
     OMEGA_EARTH,
     R_AIR,
     DM100VehicleConfig,
+    GncV2Config,
+    MassProperties3D,
     mass_properties_3d,
 )
 from dm100_3d.coords import (
@@ -57,6 +59,12 @@ from dm100_3d.physics import (
     compute_engine_thrust_3d,
     compute_fins_aero_3d,
     compute_stagnation_heat_flux_w_m2,
+    ground_effect_nominal_lift_n,
+    srp_nominal_cp_shift_m,
+    srp_nominal_drag_multiplier,
+    wgs84_coriolis_and_transport_enu,
+    wgs84_normal_gravity,
+    wgs84_radii_of_curvature,
 )
 from dm100_3d.plant_mujoco import fast_gravity
 
@@ -148,8 +156,10 @@ class RtlsController3D:
         wind_config: Wind3DConfig | None = None,
         sensor_config: SensorConfig3D | None = None,
         guidance_settings: Guidance3DSettings | None = None,
+        gnc_v2: GncV2Config | None = None,
     ) -> None:
         self.vehicle = vehicle or DM100VehicleConfig()
+        self.gnc_v2 = gnc_v2 or GncV2Config()
         base_atmo = atmo_settings or Atmosphere3DSettings()
         # Causal forecast atmosphere NEVER sees hidden density_scale != 1.0
         self.forecast_atmo_settings = Atmosphere3DSettings(
@@ -175,6 +185,7 @@ class RtlsController3D:
             planar_coriolis_only=self.forecast_atmo_settings.planar_coriolis_only,
             sensor_config=self.sensor_config,
             control_dt_s=self.settings.control_dt_s,
+            gnc_v2=self.gnc_v2,
         )
 
         # Mission phase state
@@ -216,6 +227,47 @@ class RtlsController3D:
             + max(est.main_propellant_kg, 0.0)
             + max(est.rcs_propellant_kg, 0.0)
             + (self.vehicle.upper_stage.total_mass_kg if est.upper_attached else 0.0)
+        )
+
+    def _gravity(self, altitude_m: float) -> float:
+        if self.gnc_v2.use_wgs84_gravity:
+            return wgs84_normal_gravity(self.forecast_atmo_settings.latitude_deg, altitude_m)
+        return fast_gravity(altitude_m)
+
+    def _coriolis(
+        self, altitude_m: float, vel_enu_m_s: tuple[float, float, float]
+    ) -> NDArray[np.float64]:
+        if self.gnc_v2.use_wgs84_gravity:
+            return wgs84_coriolis_and_transport_enu(
+                altitude_m=altitude_m,
+                vel_enu_m_s=vel_enu_m_s,
+                latitude_deg=self.forecast_atmo_settings.latitude_deg,
+                coriolis_enabled=self.forecast_atmo_settings.coriolis_enabled,
+                planar_coriolis_only=self.forecast_atmo_settings.planar_coriolis_only,
+            )
+        return compute_coriolis_and_centrifugal_3d(
+            altitude_m=altitude_m,
+            vel_enu_m_s=vel_enu_m_s,
+            latitude_deg=self.forecast_atmo_settings.latitude_deg,
+            coriolis_enabled=self.forecast_atmo_settings.coriolis_enabled,
+            planar_coriolis_only=self.forecast_atmo_settings.planar_coriolis_only,
+        )
+
+    def _mass_props(
+        self, mass: float, gear_ext: float, upper_attached: bool, rcs_kg: float
+    ) -> MassProperties3D:
+        if self.gnc_v2.use_dual_tank_mass_props:
+            return mass_properties_3d(
+                mass,
+                gear_ext,
+                vehicle=self.vehicle,
+                upper_attached=upper_attached,
+                dual_tank=True,
+                rcs_propellant_kg=rcs_kg,
+                dual_tank_geom=self.gnc_v2.dual_tank_geometry,
+            )
+        return mass_properties_3d(
+            mass, gear_ext, vehicle=self.vehicle, upper_attached=upper_attached
         )
 
     def _foot_height_m(self, est: EstimatedState3D, cg_m: float) -> float:
@@ -298,15 +350,16 @@ class RtlsController3D:
             )
             drag = q * (corr * cd_desc * ax_area + fin_d)
             inv_s = 1.0 / max(spd, 1.0)
-            r_orb = EARTH_RADIUS_M + (z if z > 0.0 else 0.0)
+            if self.gnc_v2.use_wgs84_gravity:
+                h_c = z if z > 0.0 else 0.0
+                r_m_w, r_n_w = wgs84_radii_of_curvature(self.forecast_atmo_settings.latitude_deg)
+                a_cent_z = (vx * vx) / (r_n_w + h_c) + (vy * vy) / (r_m_w + h_c)
+            else:
+                r_orb = EARTH_RADIUS_M + (z if z > 0.0 else 0.0)
+                a_cent_z = (vx * vx + vy * vy) / r_orb
             ax = -drag * (rx * inv_s) / mass0 - 2.0 * (om_y * vz - om_z * vy)
             ay = -drag * (ry * inv_s) / mass0 - 2.0 * (om_z * vx)
-            az = (
-                -drag * (rz * inv_s) / mass0
-                - fast_gravity(z)
-                + 2.0 * om_y * vx
-                + (vx * vx + vy * vy) / r_orb
-            )
+            az = -drag * (rz * inv_s) / mass0 - self._gravity(z) + 2.0 * om_y * vx + a_cent_z
             z += vz * dt + 0.5 * az * dt * dt
             vx += ax * dt
             vy += ay * dt
@@ -472,15 +525,35 @@ class RtlsController3D:
                     eb_eng = 1 if (q > 12_000.0 and raw_thr < lo3) else 3
                     e_thr = self.vehicle.propulsion.quantize_throttle(raw_thr, eb_eng)
                     thrust, flow = compute_engine_thrust_3d(e_thr, p_pa, self.vehicle)
+                    if self.gnc_v2.use_srp_iip_feedforward:
+                        body_drag_only = drag_scale_est * q * corr * cd_desc * ax_area
+                        srp_mult = srp_nominal_drag_multiplier(
+                            mach=mach,
+                            v_air_zb_m_s=-spd,
+                            thrust_n=thrust,
+                            dynamic_pressure_pa=q,
+                            body_radius_m=r,
+                            eta_nom=self.gnc_v2.srp_nominal_eta,
+                        )
+                        delta_drag = body_drag_only * (1.0 - srp_mult)
+                        fx += delta_drag * (rx * inv_s)
+                        fy += delta_drag * (ry * inv_s)
+                        fz += delta_drag * (rz * inv_s)
                     fx += thrust * (-rx * inv_s)
                     fy += thrust * (-ry * inv_s)
                     fz += thrust * (-rz * inv_s)
 
             mid_m = max(self.vehicle.booster_dry_mass_kg, mass - 0.5 * flow * step)
-            r_orb = EARTH_RADIUS_M + (z if z > 0.0 else 0.0)
+            if self.gnc_v2.use_wgs84_gravity:
+                h_c = z if z > 0.0 else 0.0
+                r_m_w, r_n_w = wgs84_radii_of_curvature(self.forecast_atmo_settings.latitude_deg)
+                a_cent_z = (vx * vx) / (r_n_w + h_c) + (vy * vy) / (r_m_w + h_c)
+            else:
+                r_orb = EARTH_RADIUS_M + (z if z > 0.0 else 0.0)
+                a_cent_z = (vx * vx + vy * vy) / r_orb
             ax = fx / mid_m - 2.0 * (om_y * vz - om_z * vy) + (bx if z < 14_000.0 else 0.0)
             ay = fy / mid_m - 2.0 * (om_z * vx) + (by if z < 14_000.0 else 0.0)
-            az = fz / mid_m - fast_gravity(z) + 2.0 * om_y * vx + (vx * vx + vy * vy) / r_orb
+            az = fz / mid_m - self._gravity(z) + 2.0 * om_y * vx + a_cent_z
             x += vx * step + 0.5 * ax * step * step
             y += vy * step + 0.5 * ay * step * step
             z += vz * step + 0.5 * az * step * step
@@ -602,9 +675,7 @@ class RtlsController3D:
         """3-axis quaternion attitude controller -> PriorityControlAllocator3D (3x9)."""
         s = self.settings
         mass = self._nominal_mass(est)
-        mp = mass_properties_3d(
-            mass, est.gear_extension, vehicle=self.vehicle, upper_attached=est.upper_attached
-        )
+        mp = self._mass_props(mass, est.gear_extension, est.upper_attached, est.rcs_propellant_kg)
         cg = mp.cg_station_m
         i_diag = mp.inertia_diag_kg_m2
 
@@ -613,6 +684,42 @@ class RtlsController3D:
         q_est = normalize_quat_wxyz(est.quat_wxyz, canonical=True)
         r_wb = quat_to_rotmat(q_est)
         om_b = np.asarray(est.omega_body_rad_s, dtype=np.float64)
+
+        t_k_a, p_pa_a, rho_a = self.forecast_atmo.at(est.pos_enu_m[2])
+        cur_t, _ = compute_engine_thrust_3d(est.engine_throttle, p_pa_a, self.vehicle)
+        cmd_t, _ = compute_engine_thrust_3d(throttle_cmd, p_pa_a, self.vehicle)
+        fut_t = cmd_t + (cur_t - cmd_t) * exp(
+            -s.control_dt_s / self.vehicle.propulsion.nominal_engine_tau_s
+        )
+        srp_drag_mult = 1.0
+        srp_cp_shift = 0.0
+        if self.gnc_v2.use_srp_iip_feedforward and (not est.upper_attached):
+            t_srp_mid = 0.5 * (cur_t + fut_t)
+            if t_srp_mid > 1.0:
+                v_air_s = self._air_vel(est)
+                spd_s = float(np.linalg.norm(v_air_s))
+                if spd_s > 1.0:
+                    q_s = 0.5 * rho_a * spd_s * spd_s
+                    mach_s = spd_s / sqrt(1.4 * R_AIR * t_k_a)
+                    vz_b_s = float((r_wb.T @ v_air_s)[2])
+                    r_body = self.vehicle.geometry.body_radius_m
+                    srp_drag_mult = srp_nominal_drag_multiplier(
+                        mach=mach_s,
+                        v_air_zb_m_s=vz_b_s,
+                        thrust_n=t_srp_mid,
+                        dynamic_pressure_pa=q_s,
+                        body_radius_m=r_body,
+                        eta_nom=self.gnc_v2.srp_nominal_eta,
+                        upper_attached=False,
+                    )
+                    srp_cp_shift = srp_nominal_cp_shift_m(
+                        mach=mach_s,
+                        v_air_zb_m_s=vz_b_s,
+                        thrust_n=t_srp_mid,
+                        dynamic_pressure_pa=q_s,
+                        body_radius_m=r_body,
+                        upper_attached=False,
+                    )
 
         _, btau_b, q_pa, _, _, _, _ = compute_body_aero_3d(
             altitude_m=est.pos_enu_m[2],
@@ -625,6 +732,8 @@ class RtlsController3D:
             time_s=est.time_s,
             vehicle=self.vehicle,
             upper_attached=est.upper_attached,
+            axial_drag_multiplier=srp_drag_mult,
+            cp_shift_m=srp_cp_shift,
         )
 
         # Decoupled 2-axis pointing error (body X/Y) + direct geometric zero-roll error (body Z)
@@ -672,12 +781,6 @@ class RtlsController3D:
         req_tau = i_vec * des_alpha + gyro_ff - btau_b - tb
         bg_tau = btau_b - gyro_ff + tb
 
-        _, p_pa, _ = self.forecast_atmo.at(est.pos_enu_m[2])
-        cur_t, _ = compute_engine_thrust_3d(est.engine_throttle, p_pa, self.vehicle)
-        cmd_t, _ = compute_engine_thrust_3d(throttle_cmd, p_pa, self.vehicle)
-        fut_t = cmd_t + (cur_t - cmd_t) * exp(
-            -s.control_dt_s / self.vehicle.propulsion.nominal_engine_tau_s
-        )
         if throttle_cmd <= 1e-3 or (est.engine_throttle < 1e-3 and throttle_cmd > 0.0):
             sizing_t = 0.0
         else:
@@ -766,11 +869,11 @@ class RtlsController3D:
         # Guard pre-separation RCS torque against lighter post-separation booster inertia
         rcs_cmd = out.rcs_torque_body_nm
         if est.upper_attached and self.cutoff_pending:
-            mp_sep = mass_properties_3d(
+            mp_sep = self._mass_props(
                 mass - self.vehicle.upper_stage.total_mass_kg,
                 est.gear_extension,
-                vehicle=self.vehicle,
-                upper_attached=False,
+                False,
+                est.rcs_propellant_kg,
             )
             lims_sep = [i_s * radians(2.0) for i_s in mp_sep.inertia_diag_kg_m2]
             rcs_cmd = (
@@ -787,7 +890,7 @@ class RtlsController3D:
         if vz_down <= v_td:
             return 0.0
 
-        g_loc = fast_gravity(est.pos_enu_m[2])
+        g_loc = self._gravity(est.pos_enu_m[2])
         _, p_pa, rho = self.forecast_atmo.at(min(max(est.pos_enu_m[2], 0.0), 3_000.0))
         r = self.vehicle.geometry.body_radius_m
         drag_eff = min(1.0, max(0.75, self.cached_drag_scale))
@@ -854,7 +957,7 @@ class RtlsController3D:
         s = self.settings
         ag = self.vehicle.ascent_gate
         mass = self._nominal_mass(est)
-        mp = mass_properties_3d(mass, est.gear_extension, vehicle=self.vehicle, upper_attached=True)
+        mp = self._mass_props(mass, est.gear_extension, True, est.rcs_propellant_kg)
         r_wb = quat_to_rotmat(est.quat_wxyz)
         bf_w, _, q_pa, _, _, _, _ = compute_body_aero_3d(
             altitude_m=est.pos_enu_m[2],
@@ -975,7 +1078,7 @@ class RtlsController3D:
                 free_v = (
                     (float(bf_w[0]) / mass) * float(v_air[0])
                     + (float(bf_w[1]) / mass) * float(v_air[1])
-                    + (float(bf_w[2]) / mass - fast_gravity(est.pos_enu_m[2])) * float(v_air[2])
+                    + (float(bf_w[2]) / mass - self._gravity(est.pos_enu_m[2])) * float(v_air[2])
                 ) / speed
                 d_vec = np.array(
                     [sin(pitch_x), sin(pitch_y) * cos(pitch_x), cos(pitch_x) * cos(pitch_y)]
@@ -1023,7 +1126,7 @@ class RtlsController3D:
     ) -> ActuatorCommand3D:
         s = self.settings
         _, p_pa, _ = self.forecast_atmo.at(est.pos_enu_m[2])
-        g_loc = fast_gravity(est.pos_enu_m[2])
+        g_loc = self._gravity(est.pos_enu_m[2])
         vz_down = max(0.0, -est.vel_enu_m_s[2])
 
         # Smooth causal horizontal/vertical acceleration bias compensation
@@ -1124,13 +1227,7 @@ class RtlsController3D:
         tau_aero_b_now = btau_b_now + ftau_b_now
         lever_trim = max(cg - self.vehicle.geometry.nozzle_station_m, 1.0)
         max_gim_rad = radians(self.vehicle.propulsion.gimbal_limit_deg)
-        a_cor = compute_coriolis_and_centrifugal_3d(
-            altitude_m=est.pos_enu_m[2],
-            vel_enu_m_s=est.vel_enu_m_s,
-            latitude_deg=self.forecast_atmo_settings.latitude_deg,
-            coriolis_enabled=self.forecast_atmo_settings.coriolis_enabled,
-            planar_coriolis_only=self.forecast_atmo_settings.planar_coriolis_only,
-        )
+        a_cor = self._coriolis(est.pos_enu_m[2], est.vel_enu_m_s)
 
         # Current body +z_b tilt projections along ENU X and Y
         zb_w = r_wb[:, 2]
@@ -1236,7 +1333,15 @@ class RtlsController3D:
                 mid_nrm = float(np.linalg.norm(th_vb_mid))
                 if mid_nrm > radians(2.40) and mid_nrm > 1e-12:
                     th_vb_mid *= radians(2.40) / mid_nrm
-                vb_dir_xy = self._vb_wind_trim_xy + th_vb_mid
+                # In v2 dual-tank configuration, the higher LOX-dominant CG (~9.1 m vs 7.3 m)
+                # increases post-touchdown 4-leg rocking inertia; taper upwind body lean smoothly
+                # to vertical before touchdown while TVC+RCS holds lateral pad position.
+                wt_taper = (
+                    _smoothstep((h_vref - 2.5) / 6.5)
+                    if self.gnc_v2.use_dual_tank_mass_props
+                    else 1.0
+                )
+                vb_dir_xy = self._vb_wind_trim_xy * wt_taper + th_vb_mid
                 vb_nrm = float(np.linalg.norm(vb_dir_xy))
                 if vb_nrm > radians(2.55) and vb_nrm > 1e-12:
                     vb_dir_xy *= radians(2.55) / vb_nrm
@@ -1335,6 +1440,21 @@ class RtlsController3D:
         else:
             prop_z = az_net + g_loc - b_z - float(a_cor[2])
             fz_req = max(t_min * 0.9, mass * prop_z - float(aero_f[2]))
+            if (
+                self.gnc_v2.use_ground_effect_feedforward
+                and self.landing_single_engine
+                and h < 18.0
+            ):
+                h_noz_est = h + (
+                    self.vehicle.geometry.nozzle_station_m
+                    - self.vehicle.landing_gear.foot_station_m
+                )
+                ge_ff = ground_effect_nominal_lift_n(
+                    nozzle_height_m=h_noz_est,
+                    thrust_n=max(t_min, fz_req),
+                    c_ge_nom=self.gnc_v2.ground_effect_nominal_coeff,
+                )
+                fz_req = max(t_min * 0.9, fz_req - ge_ff)
         f_xy_req = mass * prop_xy - aero_f[0:2]
 
         thrust_tilt_body_xy: tuple[float, float] | None = None
@@ -1509,9 +1629,7 @@ class RtlsController3D:
 
         s = self.settings
         mass = self._nominal_mass(est)
-        mp = mass_properties_3d(
-            mass, est.gear_extension, vehicle=self.vehicle, upper_attached=False
-        )
+        mp = self._mass_props(mass, est.gear_extension, False, est.rcs_propellant_kg)
         cg = mp.cg_station_m
         h = self._foot_height_m(est, cg)
         r_wb = quat_to_rotmat(est.quat_wxyz)

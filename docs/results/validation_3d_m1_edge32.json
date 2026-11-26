@@ -1,0 +1,4409 @@
+{
+  "schema": "dm100_3d_validation_merged_v2",
+  "suite": "edge-3d",
+  "physics_v2_preset": "m1",
+  "gnc_v2_preset": "m1",
+  "shards_merged": 4,
+  "total_cases": 32,
+  "passed_cases": 32,
+  "pass_rate": 1.0,
+  "failed_cases": [],
+  "max_position_error_m": 0.06983544303645048,
+  "max_vertical_foot_speed_m_s": 1.149311918842707,
+  "max_horizontal_foot_speed_m_s": 0.1365626906387122,
+  "max_tilt_deg": 0.05632798764567791,
+  "max_dynamic_pressure_pa": 31758.582345198363,
+  "max_heat_flux_w_m2": 17691.58686017831,
+  "max_angular_rate_deg_s": 11.16881322067091,
+  "max_angular_acceleration_deg_s2": 4.833690928809594,
+  "max_roll_deg": 0.3844601877620774,
+  "max_fin_hinge_nm": 607.2506646913093,
+  "results": [
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-01-calm-nominal",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.1139999993675,
+      "touchdown_time_s": 566.1119999994858,
+      "restarts_used": 3,
+      "main_remaining_kg": 2561.774229968068,
+      "rcs_remaining_kg": 277.5420461696033,
+      "position_error_m": 0.0003053057266317336,
+      "pos_xy_m": [
+        -0.00011732187688088917,
+        -0.00028186373289104845
+      ],
+      "vertical_foot_speed_m_s": 0.837492645601389,
+      "horizontal_foot_speed_m_s": 0.008961741621797508,
+      "tilt_deg": 0.011465666096134615,
+      "contact_rate_deg_s": 0.04945679363624557,
+      "peak_dynamic_pressure_pa": 29403.04844362991,
+      "peak_heat_flux_w_m2": 15461.645378630845,
+      "peak_ascent_axial_g": 3.369666702993471,
+      "peak_recovery_g": 3.832476858246423,
+      "peak_angular_rate_deg_s": 11.129372140329574,
+      "peak_angular_acceleration_deg_s2": 3.1586994593402404,
+      "peak_roll_deg": 0.10342011110756022,
+      "peak_fin_hinge_nm": 181.61246463719186,
+      "post_contact": {
+        "max_leg_stroke_m": 0.2742924052302011,
+        "max_leg_force_n": 26890.605072938986,
+        "max_contact_load_g": 1.209549507812267,
+        "max_tilt_deg": 0.03398266935989264,
+        "standing_stable": true,
+        "final_speed_m_s": 0.005900589729267577,
+        "final_tilt_deg": 0.015025808400423954
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.9199455102869,
+        "mean_radius_altitude_km": 702.3007474490684,
+        "mean_eccentricity": 0.0002926549969451749,
+        "upper_propellant_remaining_kg": 590.9771582713347,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579989810643603,
+        "peak_ground_effect_n": 5217.975418529679,
+        "peak_dual_slosh_force_n": 178902.36222681252
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.10000000002607,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6155
+        },
+        "flip": {
+          "start_s": 123.10000000002609,
+          "end_s": 138.60000000001892,
+          "max_throttle": 0.005632175255222601,
+          "max_throttle_cmd": 0.0,
+          "steps": 775
+        },
+        "boostback": {
+          "start_s": 138.6000000000189,
+          "end_s": 176.73999999998424,
+          "max_throttle": 0.38166290662985997,
+          "max_throttle_cmd": 0.3822187951145881,
+          "steps": 1907
+        },
+        "coast": {
+          "start_s": 176.7399999999842,
+          "end_s": 417.99999999976484,
+          "max_throttle": 0.1579089689064834,
+          "max_throttle_cmd": 0.0,
+          "steps": 12063
+        },
+        "entry_burn": {
+          "start_s": 417.99999999976484,
+          "end_s": 444.79999999974046,
+          "max_throttle": 0.27161340666559,
+          "max_throttle_cmd": 0.27192437883198717,
+          "steps": 1340
+        },
+        "aero_glide": {
+          "start_s": 444.79999999974046,
+          "end_s": 536.3799999996572,
+          "max_throttle": 0.0966776309817848,
+          "max_throttle_cmd": 0.0,
+          "steps": 4579
+        },
+        "landing_burn": {
+          "start_s": 536.3799999996572,
+          "end_s": 566.1199999994856,
+          "max_throttle": 0.20141336254132625,
+          "max_throttle_cmd": 0.20204460516194206,
+          "steps": 1487
+        },
+        "touchdown_settle": {
+          "start_s": 566.1199999994851,
+          "end_s": 571.0999999993678,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 28555,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 34.72968799997034,
+      "wall_time_s": 225.33754983800003,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1",
+      "replay_exported_path": "/kaggle/working/dm100_3d_outputs/replays/edge3d-01-calm-nominal_50hz.json"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-02-max-east-wind",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 574.3039999993639,
+      "touchdown_time_s": 569.3019999994822,
+      "restarts_used": 3,
+      "main_remaining_kg": 2634.8644875335963,
+      "rcs_remaining_kg": 272.18578702366904,
+      "position_error_m": 0.00046701547764921796,
+      "pos_xy_m": [
+        -0.00046224478341931087,
+        6.658240432397722e-05
+      ],
+      "vertical_foot_speed_m_s": 0.8365299291092944,
+      "horizontal_foot_speed_m_s": 0.00410591453122044,
+      "tilt_deg": 0.029003375076440734,
+      "contact_rate_deg_s": 0.024175710054339758,
+      "peak_dynamic_pressure_pa": 29401.405769683523,
+      "peak_heat_flux_w_m2": 14168.868836926613,
+      "peak_ascent_axial_g": 3.370679012172851,
+      "peak_recovery_g": 3.8337369869955795,
+      "peak_angular_rate_deg_s": 11.093996512010378,
+      "peak_angular_acceleration_deg_s2": 3.653769418157684,
+      "peak_roll_deg": 0.06974748595520833,
+      "peak_fin_hinge_nm": 260.8993837902111,
+      "post_contact": {
+        "max_leg_stroke_m": 0.36868960579750704,
+        "max_leg_force_n": 30117.65956427313,
+        "max_contact_load_g": 1.210924521114141,
+        "max_tilt_deg": 1.3706099989011806,
+        "standing_stable": true,
+        "final_speed_m_s": 0.03508130417115117,
+        "final_tilt_deg": 0.9979514824387501
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.8457123071607,
+        "mean_radius_altitude_km": 702.2383641832369,
+        "mean_eccentricity": 0.00029116093996898123,
+        "upper_propellant_remaining_kg": 555.5369566463714,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799899135465254,
+        "peak_ground_effect_n": 5257.523382875704,
+        "peak_dual_slosh_force_n": 178994.2442935752
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.40000000002571,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6120
+        },
+        "flip": {
+          "start_s": 122.40000000002573,
+          "end_s": 137.72000000001972,
+          "max_throttle": 0.005632769587651618,
+          "max_throttle_cmd": 0.0,
+          "steps": 766
+        },
+        "boostback": {
+          "start_s": 137.7200000000197,
+          "end_s": 174.15999999998658,
+          "max_throttle": 0.381763727758757,
+          "max_throttle_cmd": 0.38232282456430305,
+          "steps": 1822
+        },
+        "coast": {
+          "start_s": 174.15999999998655,
+          "end_s": 421.8599999997613,
+          "max_throttle": 0.16080620989696787,
+          "max_throttle_cmd": 0.0,
+          "steps": 12385
+        },
+        "entry_burn": {
+          "start_s": 421.8599999997613,
+          "end_s": 449.85999999973586,
+          "max_throttle": 0.2766496843202867,
+          "max_throttle_cmd": 0.27696853844189057,
+          "steps": 1400
+        },
+        "aero_glide": {
+          "start_s": 449.85999999973586,
+          "end_s": 539.3999999996545,
+          "max_throttle": 0.09357901706486155,
+          "max_throttle_cmd": 0.0,
+          "steps": 4477
+        },
+        "landing_burn": {
+          "start_s": 539.3999999996545,
+          "end_s": 569.3199999994818,
+          "max_throttle": 0.20396758699221315,
+          "max_throttle_cmd": 0.2045926373491494,
+          "steps": 1496
+        },
+        "touchdown_settle": {
+          "start_s": 569.3199999994813,
+          "end_s": 574.299999999364,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 61.434112999904755,
+      "wall_time_s": 345.502970804,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-03-max-west-wind",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.019999999367,
+      "touchdown_time_s": 566.0179999994853,
+      "restarts_used": 3,
+      "main_remaining_kg": 2629.4886172445263,
+      "rcs_remaining_kg": 271.93879498912554,
+      "position_error_m": 0.0005350698684027889,
+      "pos_xy_m": [
+        0.0004608025695662663,
+        -0.0002719572686171565
+      ],
+      "vertical_foot_speed_m_s": 0.8396707284961312,
+      "horizontal_foot_speed_m_s": 0.00816970088116843,
+      "tilt_deg": 0.027372482356786403,
+      "contact_rate_deg_s": 0.0420718800773287,
+      "peak_dynamic_pressure_pa": 29426.563371356056,
+      "peak_heat_flux_w_m2": 15377.26041972562,
+      "peak_ascent_axial_g": 3.369798343403991,
+      "peak_recovery_g": 3.8339883466985767,
+      "peak_angular_rate_deg_s": 11.126769087255537,
+      "peak_angular_acceleration_deg_s2": 3.623589981527018,
+      "peak_roll_deg": 0.12385285182913693,
+      "peak_fin_hinge_nm": 228.64069807701824,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3686502914373803,
+        "max_leg_force_n": 30114.970007970624,
+        "max_contact_load_g": 1.2125664751840077,
+        "max_tilt_deg": 1.3724875675964772,
+        "standing_stable": true,
+        "final_speed_m_s": 0.03559054512848609,
+        "final_tilt_deg": 0.9963361948590153
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 706.6450877418024,
+        "mean_radius_altitude_km": 704.013321863534,
+        "mean_eccentricity": 0.000294192253580542,
+        "upper_propellant_remaining_kg": 574.6968949598454,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898071408047,
+        "peak_ground_effect_n": 5253.160700717509,
+        "peak_dual_slosh_force_n": 178915.74218075266
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.26000000002615,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6163
+        },
+        "flip": {
+          "start_s": 123.26000000002617,
+          "end_s": 138.76000000001878,
+          "max_throttle": 0.005632880660477918,
+          "max_throttle_cmd": 0.0,
+          "steps": 775
+        },
+        "boostback": {
+          "start_s": 138.76000000001875,
+          "end_s": 176.03999999998487,
+          "max_throttle": 0.38177374651531687,
+          "max_throttle_cmd": 0.3823331625703284,
+          "steps": 1864
+        },
+        "coast": {
+          "start_s": 176.03999999998484,
+          "end_s": 418.21999999976464,
+          "max_throttle": 0.1593937955805237,
+          "max_throttle_cmd": 0.0,
+          "steps": 12109
+        },
+        "entry_burn": {
+          "start_s": 418.21999999976464,
+          "end_s": 445.01999999974026,
+          "max_throttle": 0.27420176297775106,
+          "max_throttle_cmd": 0.2745162489741989,
+          "steps": 1340
+        },
+        "aero_glide": {
+          "start_s": 445.01999999974026,
+          "end_s": 536.1199999996575,
+          "max_throttle": 0.09873567000183119,
+          "max_throttle_cmd": 0.0,
+          "steps": 4555
+        },
+        "landing_burn": {
+          "start_s": 536.1199999996575,
+          "end_s": 566.0199999994852,
+          "max_throttle": 0.20385662397431545,
+          "max_throttle_cmd": 0.20448232318270296,
+          "steps": 1495
+        },
+        "touchdown_settle": {
+          "start_s": 566.0199999994848,
+          "end_s": 570.9999999993674,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 37.572368000041934,
+      "wall_time_s": 223.03927398599996,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-04-max-north-crosswind",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.0899999993667,
+      "touchdown_time_s": 566.087999999485,
+      "restarts_used": 3,
+      "main_remaining_kg": 2564.894335242401,
+      "rcs_remaining_kg": 269.90996416497217,
+      "position_error_m": 0.00046899156732421184,
+      "pos_xy_m": [
+        -9.60361803580387e-05,
+        -0.0004590535287779182
+      ],
+      "vertical_foot_speed_m_s": 0.8399207199833554,
+      "horizontal_foot_speed_m_s": 0.006228265728557328,
+      "tilt_deg": 0.028019950267933323,
+      "contact_rate_deg_s": 0.03334160999408323,
+      "peak_dynamic_pressure_pa": 29406.631467999818,
+      "peak_heat_flux_w_m2": 15326.743815280202,
+      "peak_ascent_axial_g": 3.369765589500516,
+      "peak_recovery_g": 3.833727949096559,
+      "peak_angular_rate_deg_s": 11.114762867143197,
+      "peak_angular_acceleration_deg_s2": 3.6449327441066703,
+      "peak_roll_deg": 0.28204553798244986,
+      "peak_fin_hinge_nm": 302.49136175443925,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3662012892629663,
+        "max_leg_force_n": 29921.17668964449,
+        "max_contact_load_g": 1.2134752691711468,
+        "max_tilt_deg": 1.366657056856158,
+        "standing_stable": true,
+        "final_speed_m_s": 0.03351083995784019,
+        "final_tilt_deg": 0.9885047417157073
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.5106350746909,
+        "mean_radius_altitude_km": 701.8635251037907,
+        "mean_eccentricity": 0.00029623598894326284,
+        "upper_propellant_remaining_kg": 587.6567055695646,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898307718316,
+        "peak_ground_effect_n": 5214.174163009078,
+        "peak_dual_slosh_force_n": 178912.97346205055
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.02000000002603,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6151
+        },
+        "flip": {
+          "start_s": 123.02000000002604,
+          "end_s": 138.68000000001885,
+          "max_throttle": 0.0056325004351190505,
+          "max_throttle_cmd": 0.0,
+          "steps": 783
+        },
+        "boostback": {
+          "start_s": 138.68000000001882,
+          "end_s": 176.6599999999843,
+          "max_throttle": 0.38169346299200263,
+          "max_throttle_cmd": 0.38225032640081635,
+          "steps": 1899
+        },
+        "coast": {
+          "start_s": 176.65999999998428,
+          "end_s": 418.0399999997648,
+          "max_throttle": 0.15818839342214022,
+          "max_throttle_cmd": 0.0,
+          "steps": 12069
+        },
+        "entry_burn": {
+          "start_s": 418.0399999997648,
+          "end_s": 445.03999999974025,
+          "max_throttle": 0.2720793492797174,
+          "max_throttle_cmd": 0.2723909793724558,
+          "steps": 1350
+        },
+        "aero_glide": {
+          "start_s": 445.03999999974025,
+          "end_s": 536.2999999996573,
+          "max_throttle": 0.0963608541190927,
+          "max_throttle_cmd": 0.0,
+          "steps": 4563
+        },
+        "landing_burn": {
+          "start_s": 536.2999999996573,
+          "end_s": 566.0999999994847,
+          "max_throttle": 0.20154081535384963,
+          "max_throttle_cmd": 0.20217053831654427,
+          "steps": 1490
+        },
+        "touchdown_settle": {
+          "start_s": 566.0999999994842,
+          "end_s": 571.0799999993669,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 59.10873499999525,
+      "wall_time_s": 322.34524705999996,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-05-max-south-crosswind",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.3059999993666,
+      "touchdown_time_s": 566.3039999994849,
+      "restarts_used": 3,
+      "main_remaining_kg": 2573.064253455,
+      "rcs_remaining_kg": 270.2489025688742,
+      "position_error_m": 0.000461886410208868,
+      "pos_xy_m": [
+        -6.65859642864973e-05,
+        0.00045706166465332883
+      ],
+      "vertical_foot_speed_m_s": 0.8375233719322788,
+      "horizontal_foot_speed_m_s": 0.005972003882542694,
+      "tilt_deg": 0.028694817487329532,
+      "contact_rate_deg_s": 0.033221547592872894,
+      "peak_dynamic_pressure_pa": 29406.321657250995,
+      "peak_heat_flux_w_m2": 15288.663515918113,
+      "peak_ascent_axial_g": 3.369800622114929,
+      "peak_recovery_g": 3.8337364394847318,
+      "peak_angular_rate_deg_s": 11.119760049886866,
+      "peak_angular_acceleration_deg_s2": 3.6443643215076227,
+      "peak_roll_deg": 0.2729982448710153,
+      "peak_fin_hinge_nm": 607.2506646913093,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3665158148401733,
+        "max_leg_force_n": 29946.15707903341,
+        "max_contact_load_g": 1.211338343345079,
+        "max_tilt_deg": 1.3674408197347243,
+        "standing_stable": true,
+        "final_speed_m_s": 0.033727477067459696,
+        "final_tilt_deg": 0.9894830699077907
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 706.7785274108434,
+        "mean_radius_altitude_km": 704.183124660098,
+        "mean_eccentricity": 0.0002895802574031764,
+        "upper_propellant_remaining_kg": 584.526032783931,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898151029463,
+        "peak_ground_effect_n": 5220.507126504387,
+        "peak_dual_slosh_force_n": 178915.84456732878
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.02000000002603,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6151
+        },
+        "flip": {
+          "start_s": 123.02000000002604,
+          "end_s": 138.60000000001892,
+          "max_throttle": 0.005632314989506636,
+          "max_throttle_cmd": 0.0,
+          "steps": 779
+        },
+        "boostback": {
+          "start_s": 138.6000000000189,
+          "end_s": 176.47999999998447,
+          "max_throttle": 0.38167475474898743,
+          "max_throttle_cmd": 0.3822310205230761,
+          "steps": 1894
+        },
+        "coast": {
+          "start_s": 176.47999999998444,
+          "end_s": 418.31999999976455,
+          "max_throttle": 0.15834714336022104,
+          "max_throttle_cmd": 0.0,
+          "steps": 12092
+        },
+        "entry_burn": {
+          "start_s": 418.31999999976455,
+          "end_s": 445.31999999974,
+          "max_throttle": 0.27235643180528346,
+          "max_throttle_cmd": 0.27266845417424523,
+          "steps": 1350
+        },
+        "aero_glide": {
+          "start_s": 445.31999999974,
+          "end_s": 536.4999999996571,
+          "max_throttle": 0.0962945550247645,
+          "max_throttle_cmd": 0.0,
+          "steps": 4559
+        },
+        "landing_burn": {
+          "start_s": 536.4999999996571,
+          "end_s": 566.3199999994845,
+          "max_throttle": 0.2017315962612728,
+          "max_throttle_cmd": 0.2023617845037588,
+          "steps": 1491
+        },
+        "touchdown_settle": {
+          "start_s": 566.319999999484,
+          "end_s": 571.2999999993667,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 36.28105799998593,
+      "wall_time_s": 217.76187681700003,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-06-diagonal-ne-wind",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 574.243999999364,
+      "touchdown_time_s": 569.2419999994822,
+      "restarts_used": 3,
+      "main_remaining_kg": 2649.415861113692,
+      "rcs_remaining_kg": 264.85860183040177,
+      "position_error_m": 0.000695533743280053,
+      "pos_xy_m": [
+        -0.0005019665310132503,
+        -0.00048145279081513934
+      ],
+      "vertical_foot_speed_m_s": 0.8371635812155654,
+      "horizontal_foot_speed_m_s": 0.003526936314467182,
+      "tilt_deg": 0.03804554246087073,
+      "contact_rate_deg_s": 0.01921206521734175,
+      "peak_dynamic_pressure_pa": 29401.467947848894,
+      "peak_heat_flux_w_m2": 14216.958305383414,
+      "peak_ascent_axial_g": 3.370730340431338,
+      "peak_recovery_g": 3.8341104065696388,
+      "peak_angular_rate_deg_s": 11.094340037928092,
+      "peak_angular_acceleration_deg_s2": 3.6639935783551856,
+      "peak_roll_deg": 0.2560536088738116,
+      "peak_fin_hinge_nm": 221.35895177638335,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3521662825178496,
+        "max_leg_force_n": 28779.99457299414,
+        "max_contact_load_g": 1.21253177507242,
+        "max_tilt_deg": 1.5901324832774701,
+        "standing_stable": true,
+        "final_speed_m_s": 0.04170594984136041,
+        "final_tilt_deg": 1.1953358003744945
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 706.7832379371989,
+        "mean_radius_altitude_km": 704.1144859217443,
+        "mean_eccentricity": 0.00029892461250149787,
+        "upper_propellant_remaining_kg": 546.9871361082137,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799899526161867,
+        "peak_ground_effect_n": 5261.49115103806,
+        "peak_dual_slosh_force_n": 178998.7582425084
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.54000000002578,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6127
+        },
+        "flip": {
+          "start_s": 122.5400000000258,
+          "end_s": 138.1800000000193,
+          "max_throttle": 0.005632792239642742,
+          "max_throttle_cmd": 0.0,
+          "steps": 782
+        },
+        "boostback": {
+          "start_s": 138.18000000001928,
+          "end_s": 174.3599999999864,
+          "max_throttle": 0.38172479631301837,
+          "max_throttle_cmd": 0.3822826616230094,
+          "steps": 1809
+        },
+        "coast": {
+          "start_s": 174.35999999998637,
+          "end_s": 421.9999999997612,
+          "max_throttle": 0.16123026360650658,
+          "max_throttle_cmd": 0.0,
+          "steps": 12382
+        },
+        "entry_burn": {
+          "start_s": 421.9999999997612,
+          "end_s": 450.19999999973555,
+          "max_throttle": 0.2773767411796584,
+          "max_throttle_cmd": 0.27769652132451095,
+          "steps": 1410
+        },
+        "aero_glide": {
+          "start_s": 450.19999999973555,
+          "end_s": 539.3199999996546,
+          "max_throttle": 0.09357901607048705,
+          "max_throttle_cmd": 0.0,
+          "steps": 4456
+        },
+        "landing_burn": {
+          "start_s": 539.3199999996546,
+          "end_s": 569.2599999994818,
+          "max_throttle": 0.2042534174482537,
+          "max_throttle_cmd": 0.20487961173028188,
+          "steps": 1497
+        },
+        "touchdown_settle": {
+          "start_s": 569.2599999994814,
+          "end_s": 574.239999999364,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 61.46333899994261,
+      "wall_time_s": 344.058220039,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-07-diagonal-sw-wind",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 567.5379999993702,
+      "touchdown_time_s": 562.5359999994885,
+      "restarts_used": 3,
+      "main_remaining_kg": 2528.6918580936854,
+      "rcs_remaining_kg": 266.10918150261034,
+      "position_error_m": 0.0006890924225176128,
+      "pos_xy_m": [
+        0.0004824265816396698,
+        0.0004920497536821406
+      ],
+      "vertical_foot_speed_m_s": 0.8363397654139016,
+      "horizontal_foot_speed_m_s": 0.0020019703219205666,
+      "tilt_deg": 0.03662014662497732,
+      "contact_rate_deg_s": 0.010104632928111541,
+      "peak_dynamic_pressure_pa": 29424.800501522677,
+      "peak_heat_flux_w_m2": 16150.11046723076,
+      "peak_ascent_axial_g": 3.36907978570439,
+      "peak_recovery_g": 3.834052040150916,
+      "peak_angular_rate_deg_s": 11.145571340190784,
+      "peak_angular_acceleration_deg_s2": 3.6305368216362313,
+      "peak_roll_deg": 0.13282815720473412,
+      "peak_fin_hinge_nm": 313.8206703731742,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3480963039654422,
+        "max_leg_force_n": 28457.946304125042,
+        "max_contact_load_g": 1.2114518148168962,
+        "max_tilt_deg": 1.5818971704113,
+        "standing_stable": true,
+        "final_speed_m_s": 0.038414298509612435,
+        "final_tilt_deg": 1.1788686979131544
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 706.9358969906392,
+        "mean_radius_altitude_km": 704.3082485370534,
+        "mean_eccentricity": 0.00029364950596723495,
+        "upper_propellant_remaining_kg": 611.5847732019238,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799897043164232,
+        "peak_ground_effect_n": 5193.243599190144,
+        "peak_dual_slosh_force_n": 178848.8295081748
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.38000000002621,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6169
+        },
+        "flip": {
+          "start_s": 123.38000000002623,
+          "end_s": 139.04000000001852,
+          "max_throttle": 0.005632711926308105,
+          "max_throttle_cmd": 0.0,
+          "steps": 783
+        },
+        "boostback": {
+          "start_s": 139.0400000000185,
+          "end_s": 178.17999999998293,
+          "max_throttle": 0.38173509513196435,
+          "max_throttle_cmd": 0.3822932806841839,
+          "steps": 1957
+        },
+        "coast": {
+          "start_s": 178.1799999999829,
+          "end_s": 413.9799999997685,
+          "max_throttle": 0.15628463818058724,
+          "max_throttle_cmd": 0.0,
+          "steps": 11790
+        },
+        "entry_burn": {
+          "start_s": 413.9799999997685,
+          "end_s": 439.97999999974485,
+          "max_throttle": 0.2687622196155255,
+          "max_throttle_cmd": 0.2690684591923503,
+          "steps": 1300
+        },
+        "aero_glide": {
+          "start_s": 439.97999999974485,
+          "end_s": 532.8199999996605,
+          "max_throttle": 0.10052911573846557,
+          "max_throttle_cmd": 0.0,
+          "steps": 4642
+        },
+        "landing_burn": {
+          "start_s": 532.8199999996605,
+          "end_s": 562.5399999994884,
+          "max_throttle": 0.20034296050586783,
+          "max_throttle_cmd": 0.20097451197197574,
+          "steps": 1486
+        },
+        "touchdown_settle": {
+          "start_s": 562.5399999994879,
+          "end_s": 567.5199999993706,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 36.85326899994834,
+      "wall_time_s": 224.87937636900006,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-08-shear-east-to-north",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 567.1559999993706,
+      "touchdown_time_s": 562.1539999994889,
+      "restarts_used": 3,
+      "main_remaining_kg": 2518.7071362341962,
+      "rcs_remaining_kg": 267.5659525752723,
+      "position_error_m": 0.0007747930480361816,
+      "pos_xy_m": [
+        0.0004002038005315586,
+        -0.0006634313719785139
+      ],
+      "vertical_foot_speed_m_s": 0.840549473646708,
+      "horizontal_foot_speed_m_s": 0.005436221490768352,
+      "tilt_deg": 0.04995003456382987,
+      "contact_rate_deg_s": 0.023484368329139426,
+      "peak_dynamic_pressure_pa": 29459.923560398263,
+      "peak_heat_flux_w_m2": 16201.972028369288,
+      "peak_ascent_axial_g": 3.3690434897234107,
+      "peak_recovery_g": 3.834281499773124,
+      "peak_angular_rate_deg_s": 11.139040302636928,
+      "peak_angular_acceleration_deg_s2": 3.6676682260155244,
+      "peak_roll_deg": 0.15898857476485845,
+      "peak_fin_hinge_nm": 283.0312015156806,
+      "post_contact": {
+        "max_leg_stroke_m": 0.36777987813889124,
+        "max_leg_force_n": 30064.941007212812,
+        "max_contact_load_g": 1.2154308913766723,
+        "max_tilt_deg": 1.8499863523743016,
+        "standing_stable": true,
+        "final_speed_m_s": 0.042788509736150726,
+        "final_tilt_deg": 1.4050077836763677
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.8401017382853,
+        "mean_radius_altitude_km": 702.1780042309705,
+        "mean_eccentricity": 0.0002981648852502633,
+        "upper_propellant_remaining_kg": 617.9766511860148,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799897212487097,
+        "peak_ground_effect_n": 5186.843407067111,
+        "peak_dual_slosh_force_n": 178845.8122172312
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.3400000000262,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6167
+        },
+        "flip": {
+          "start_s": 123.34000000002621,
+          "end_s": 139.12000000001845,
+          "max_throttle": 0.005632898968589317,
+          "max_throttle_cmd": 0.0,
+          "steps": 789
+        },
+        "boostback": {
+          "start_s": 139.12000000001842,
+          "end_s": 178.55999999998258,
+          "max_throttle": 0.38175128880632125,
+          "max_throttle_cmd": 0.3823099921782718,
+          "steps": 1972
+        },
+        "coast": {
+          "start_s": 178.55999999998255,
+          "end_s": 413.5599999997689,
+          "max_throttle": 0.15579828926074057,
+          "max_throttle_cmd": 0.0,
+          "steps": 11750
+        },
+        "entry_burn": {
+          "start_s": 413.5599999997689,
+          "end_s": 439.3599999997454,
+          "max_throttle": 0.2679201643902918,
+          "max_throttle_cmd": 0.2682251662305702,
+          "steps": 1290
+        },
+        "aero_glide": {
+          "start_s": 439.3599999997454,
+          "end_s": 532.4599999996608,
+          "max_throttle": 0.10077807873205659,
+          "max_throttle_cmd": 0.0,
+          "steps": 4655
+        },
+        "landing_burn": {
+          "start_s": 532.4599999996608,
+          "end_s": 562.1599999994887,
+          "max_throttle": 0.20014333631470016,
+          "max_throttle_cmd": 0.20077596975450998,
+          "steps": 1485
+        },
+        "touchdown_settle": {
+          "start_s": 562.1599999994883,
+          "end_s": 567.139999999371,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 57.65174099997239,
+      "wall_time_s": 324.12307566499993,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-09-shear-west-to-south",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 573.6339999993643,
+      "touchdown_time_s": 568.6319999994826,
+      "restarts_used": 3,
+      "main_remaining_kg": 2617.0828283838205,
+      "rcs_remaining_kg": 268.7182011896848,
+      "position_error_m": 0.0007596676419812055,
+      "pos_xy_m": [
+        -0.0006599222357233127,
+        0.00037629452437051153
+      ],
+      "vertical_foot_speed_m_s": 0.8363282751835799,
+      "horizontal_foot_speed_m_s": 0.0017794606136533905,
+      "tilt_deg": 0.05632798764567791,
+      "contact_rate_deg_s": 0.0056023074542309315,
+      "peak_dynamic_pressure_pa": 29398.08030262092,
+      "peak_heat_flux_w_m2": 14553.737372037851,
+      "peak_ascent_axial_g": 3.370392210732072,
+      "peak_recovery_g": 3.8345968897472167,
+      "peak_angular_rate_deg_s": 11.097783708275204,
+      "peak_angular_acceleration_deg_s2": 3.6798375797279026,
+      "peak_roll_deg": 0.2611619799198048,
+      "peak_fin_hinge_nm": 277.19966271702276,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3712696326372072,
+        "max_leg_force_n": 30342.63439587878,
+        "max_contact_load_g": 1.2134018619443057,
+        "max_tilt_deg": 1.8555207338990805,
+        "standing_stable": true,
+        "final_speed_m_s": 0.0469420369484152,
+        "final_tilt_deg": 1.4246267173241194
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 706.3135912287198,
+        "mean_radius_altitude_km": 703.7240124039873,
+        "mean_eccentricity": 0.00028887550441281497,
+        "upper_propellant_remaining_kg": 562.0432162266552,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898949357838,
+        "peak_ground_effect_n": 5245.713986343294,
+        "peak_dual_slosh_force_n": 178968.44068151814
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.72000000002588,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6136
+        },
+        "flip": {
+          "start_s": 122.72000000002589,
+          "end_s": 138.16000000001932,
+          "max_throttle": 0.0056320303774809385,
+          "max_throttle_cmd": 0.0,
+          "steps": 772
+        },
+        "boostback": {
+          "start_s": 138.1600000000193,
+          "end_s": 174.95999999998585,
+          "max_throttle": 0.38163832056563823,
+          "max_throttle_cmd": 0.3821934263496496,
+          "steps": 1840
+        },
+        "coast": {
+          "start_s": 174.95999999998583,
+          "end_s": 421.1999999997619,
+          "max_throttle": 0.16014326879565635,
+          "max_throttle_cmd": 0.0,
+          "steps": 12312
+        },
+        "entry_burn": {
+          "start_s": 421.1999999997619,
+          "end_s": 448.99999999973664,
+          "max_throttle": 0.2754902616102452,
+          "max_throttle_cmd": 0.27580723459535,
+          "steps": 1390
+        },
+        "aero_glide": {
+          "start_s": 448.99999999973664,
+          "end_s": 538.7599999996551,
+          "max_throttle": 0.0935790306839521,
+          "max_throttle_cmd": 0.0,
+          "steps": 4488
+        },
+        "landing_burn": {
+          "start_s": 538.7599999996551,
+          "end_s": 568.6399999994824,
+          "max_throttle": 0.20361657142550232,
+          "max_throttle_cmd": 0.20424327333405234,
+          "steps": 1494
+        },
+        "touchdown_settle": {
+          "start_s": 568.6399999994819,
+          "end_s": 573.6199999993646,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 46.7070770000646,
+      "wall_time_s": 213.47656623799998,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-10-opposing-cross-shear",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 569.9279999993678,
+      "touchdown_time_s": 564.9259999994861,
+      "restarts_used": 3,
+      "main_remaining_kg": 2583.189237620219,
+      "rcs_remaining_kg": 268.15952003333535,
+      "position_error_m": 0.0013710416478573283,
+      "pos_xy_m": [
+        0.0008933971751835335,
+        -0.0010399984074667716
+      ],
+      "vertical_foot_speed_m_s": 0.8353765680363355,
+      "horizontal_foot_speed_m_s": 0.0037677022829544996,
+      "tilt_deg": 0.012001394402782207,
+      "contact_rate_deg_s": 0.015156669586493006,
+      "peak_dynamic_pressure_pa": 29555.51185277726,
+      "peak_heat_flux_w_m2": 15652.550246889425,
+      "peak_ascent_axial_g": 3.3695775858792647,
+      "peak_recovery_g": 3.8345668723411266,
+      "peak_angular_rate_deg_s": 11.128557930843247,
+      "peak_angular_acceleration_deg_s2": 3.7531238452967273,
+      "peak_roll_deg": 0.16250193023395076,
+      "peak_fin_hinge_nm": 256.016824424874,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3710845645621675,
+        "max_leg_force_n": 30340.4722022047,
+        "max_contact_load_g": 1.208210917707764,
+        "max_tilt_deg": 1.8693532235258505,
+        "standing_stable": true,
+        "final_speed_m_s": 0.04368651750266934,
+        "final_tilt_deg": 1.4073295246896675
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 705.1950390604837,
+        "mean_radius_altitude_km": 702.5486096862647,
+        "mean_eccentricity": 0.0002961251673148439,
+        "upper_propellant_remaining_kg": 589.7875922001554,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799897964654736,
+        "peak_ground_effect_n": 5227.271798697471,
+        "peak_dual_slosh_force_n": 178895.63295471267
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.24000000002614,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6162
+        },
+        "flip": {
+          "start_s": 123.24000000002616,
+          "end_s": 138.88000000001867,
+          "max_throttle": 0.005632895573429691,
+          "max_throttle_cmd": 0.0,
+          "steps": 782
+        },
+        "boostback": {
+          "start_s": 138.88000000001864,
+          "end_s": 176.91999999998407,
+          "max_throttle": 0.3817619610525818,
+          "max_throttle_cmd": 0.3823210031291831,
+          "steps": 1902
+        },
+        "coast": {
+          "start_s": 176.91999999998404,
+          "end_s": 416.9199999997658,
+          "max_throttle": 0.15811768576358998,
+          "max_throttle_cmd": 0.0,
+          "steps": 12000
+        },
+        "entry_burn": {
+          "start_s": 416.9199999997658,
+          "end_s": 443.51999999974163,
+          "max_throttle": 0.27195497861972895,
+          "max_throttle_cmd": 0.27226614831374024,
+          "steps": 1330
+        },
+        "aero_glide": {
+          "start_s": 443.51999999974163,
+          "end_s": 535.0999999996584,
+          "max_throttle": 0.0986806629732679,
+          "max_throttle_cmd": 0.0,
+          "steps": 4579
+        },
+        "landing_burn": {
+          "start_s": 535.0999999996584,
+          "end_s": 564.9399999994857,
+          "max_throttle": 0.20237185586730885,
+          "max_throttle_cmd": 0.20285247202705214,
+          "steps": 1492
+        },
+        "touchdown_settle": {
+          "start_s": 564.9399999994853,
+          "end_s": 569.919999999368,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 60.57168899997123,
+      "wall_time_s": 347.3517441860001,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-11-updraft-crosswind",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 575.3279999993633,
+      "touchdown_time_s": 570.3259999994816,
+      "restarts_used": 3,
+      "main_remaining_kg": 2658.227319500811,
+      "rcs_remaining_kg": 268.36723324362634,
+      "position_error_m": 0.0009205240597418958,
+      "pos_xy_m": [
+        -0.0006222700553305144,
+        -0.0006783395335690379
+      ],
+      "vertical_foot_speed_m_s": 0.8391506304981583,
+      "horizontal_foot_speed_m_s": 0.0037817498318327733,
+      "tilt_deg": 0.00047488007680200346,
+      "contact_rate_deg_s": 0.013141526187898505,
+      "peak_dynamic_pressure_pa": 29097.701243194682,
+      "peak_heat_flux_w_m2": 14259.124003503426,
+      "peak_ascent_axial_g": 3.3706572055751205,
+      "peak_recovery_g": 3.858959544731529,
+      "peak_angular_rate_deg_s": 11.09388550679491,
+      "peak_angular_acceleration_deg_s2": 3.6442623775830323,
+      "peak_roll_deg": 0.27631777163064,
+      "peak_fin_hinge_nm": 242.0399423621852,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3302634931921886,
+        "max_leg_force_n": 27352.467917959188,
+        "max_contact_load_g": 1.209638454142801,
+        "max_tilt_deg": 1.0500854314497146,
+        "standing_stable": true,
+        "final_speed_m_s": 0.02930684413849025,
+        "final_tilt_deg": 0.7832623402445958
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.9568976158546,
+        "mean_radius_altitude_km": 702.2980793989626,
+        "mean_eccentricity": 0.0002977213462198309,
+        "upper_propellant_remaining_kg": 553.6427696326591,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799899519012505,
+        "peak_ground_effect_n": 5264.07231723874,
+        "peak_dual_slosh_force_n": 178992.6803367358
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.62000000002583,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6131
+        },
+        "flip": {
+          "start_s": 122.62000000002584,
+          "end_s": 138.26000000001923,
+          "max_throttle": 0.005632621320975132,
+          "max_throttle_cmd": 0.0,
+          "steps": 782
+        },
+        "boostback": {
+          "start_s": 138.2600000000192,
+          "end_s": 174.65999999998613,
+          "max_throttle": 0.38170346814472916,
+          "max_throttle_cmd": 0.38226065210761967,
+          "steps": 1820
+        },
+        "coast": {
+          "start_s": 174.6599999999861,
+          "end_s": 421.83999999976135,
+          "max_throttle": 0.1608477735695478,
+          "max_throttle_cmd": 0.0,
+          "steps": 12359
+        },
+        "entry_burn": {
+          "start_s": 421.83999999976135,
+          "end_s": 449.8399999997359,
+          "max_throttle": 0.276719264836168,
+          "max_throttle_cmd": 0.27703808319586937,
+          "steps": 1400
+        },
+        "aero_glide": {
+          "start_s": 449.8399999997359,
+          "end_s": 540.4799999996535,
+          "max_throttle": 0.09357901619136481,
+          "max_throttle_cmd": 0.0,
+          "steps": 4532
+        },
+        "landing_burn": {
+          "start_s": 540.4799999996535,
+          "end_s": 570.3399999994813,
+          "max_throttle": 0.2027627250076209,
+          "max_throttle_cmd": 0.20335692032181996,
+          "steps": 1493
+        },
+        "touchdown_settle": {
+          "start_s": 570.3399999994808,
+          "end_s": 575.3199999993635,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 38.35733900007199,
+      "wall_time_s": 222.52656372499996,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-12-downdraft-crosswind",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 567.2379999993705,
+      "touchdown_time_s": 562.2359999994887,
+      "restarts_used": 3,
+      "main_remaining_kg": 2531.7930767522093,
+      "rcs_remaining_kg": 270.8683464220727,
+      "position_error_m": 0.0028599412053232558,
+      "pos_xy_m": [
+        -0.0022303485380480445,
+        -0.0017901980607555094
+      ],
+      "vertical_foot_speed_m_s": 0.8359198283136051,
+      "horizontal_foot_speed_m_s": 0.005448526052648424,
+      "tilt_deg": 0.023697279912728762,
+      "contact_rate_deg_s": 0.03627076889437445,
+      "peak_dynamic_pressure_pa": 29776.442230565895,
+      "peak_heat_flux_w_m2": 15998.25394865744,
+      "peak_ascent_axial_g": 3.3692236829767994,
+      "peak_recovery_g": 3.818039990520308,
+      "peak_angular_rate_deg_s": 11.141038871436896,
+      "peak_angular_acceleration_deg_s2": 3.6066383862229348,
+      "peak_roll_deg": 0.2287963118223478,
+      "peak_fin_hinge_nm": 435.97155117685116,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3227115201291976,
+        "max_leg_force_n": 27010.90519504014,
+        "max_contact_load_g": 1.209512086988,
+        "max_tilt_deg": 0.9870887131287899,
+        "standing_stable": true,
+        "final_speed_m_s": 0.020890885546482597,
+        "final_tilt_deg": 0.667720681266122
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 706.2177341606142,
+        "mean_radius_altitude_km": 703.590329033413,
+        "mean_eccentricity": 0.0002936462207293276,
+        "upper_propellant_remaining_kg": 603.5537108247718,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579989741332125,
+        "peak_ground_effect_n": 5196.451475987252,
+        "peak_dual_slosh_force_n": 178861.60427769832
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.30000000002617,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6165
+        },
+        "flip": {
+          "start_s": 123.30000000002619,
+          "end_s": 138.90000000001865,
+          "max_throttle": 0.005632367933509186,
+          "max_throttle_cmd": 0.0,
+          "steps": 780
+        },
+        "boostback": {
+          "start_s": 138.90000000001862,
+          "end_s": 177.6599999999834,
+          "max_throttle": 0.381685726508269,
+          "max_throttle_cmd": 0.3822423408515717,
+          "steps": 1938
+        },
+        "coast": {
+          "start_s": 177.65999999998337,
+          "end_s": 415.0599999997675,
+          "max_throttle": 0.15689061390913797,
+          "max_throttle_cmd": 0.0,
+          "steps": 11870
+        },
+        "entry_burn": {
+          "start_s": 415.0599999997675,
+          "end_s": 441.2599999997437,
+          "max_throttle": 0.26982556566402094,
+          "max_throttle_cmd": 0.2701333966685366,
+          "steps": 1310
+        },
+        "aero_glide": {
+          "start_s": 441.2599999997437,
+          "end_s": 532.4199999996608,
+          "max_throttle": 0.09918316871907248,
+          "max_throttle_cmd": 0.0,
+          "steps": 4558
+        },
+        "landing_burn": {
+          "start_s": 532.4199999996608,
+          "end_s": 562.2399999994886,
+          "max_throttle": 0.2025364693382461,
+          "max_throttle_cmd": 0.20319234844590298,
+          "steps": 1491
+        },
+        "touchdown_settle": {
+          "start_s": 562.2399999994882,
+          "end_s": 567.2199999993709,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 58.04985199995372,
+      "wall_time_s": 321.92144102599997,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-13-gust-ascent-maxq",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.8579999993663,
+      "touchdown_time_s": 566.8559999994845,
+      "restarts_used": 3,
+      "main_remaining_kg": 2552.1449431170477,
+      "rcs_remaining_kg": 272.3439473589673,
+      "position_error_m": 0.0006124783102686321,
+      "pos_xy_m": [
+        -0.0006036758878934312,
+        -0.00010346546730961143
+      ],
+      "vertical_foot_speed_m_s": 0.8375729193469401,
+      "horizontal_foot_speed_m_s": 0.005362018122029188,
+      "tilt_deg": 0.01564485699607091,
+      "contact_rate_deg_s": 0.028626264180396613,
+      "peak_dynamic_pressure_pa": 29472.37739855797,
+      "peak_heat_flux_w_m2": 15226.31822836627,
+      "peak_ascent_axial_g": 3.3698367026765013,
+      "peak_recovery_g": 3.83313980163733,
+      "peak_angular_rate_deg_s": 11.124024195269307,
+      "peak_angular_acceleration_deg_s2": 3.655563690358431,
+      "peak_roll_deg": 0.2773437766231106,
+      "peak_fin_hinge_nm": 173.11141914171802,
+      "post_contact": {
+        "max_leg_stroke_m": 0.30642231442479556,
+        "max_leg_force_n": 27019.752798464106,
+        "max_contact_load_g": 1.2103242208277807,
+        "max_tilt_deg": 0.7167510814300619,
+        "standing_stable": true,
+        "final_speed_m_s": 0.015708256369303526,
+        "final_tilt_deg": 0.5119863382179264
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 705.8344161059754,
+        "mean_radius_altitude_km": 703.2292452165932,
+        "mean_eccentricity": 0.00029084678564841117,
+        "upper_propellant_remaining_kg": 587.5387235838184,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898267331166,
+        "peak_ground_effect_n": 5209.319059816228,
+        "peak_dual_slosh_force_n": 178918.1085639978
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.86000000002595,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6143
+        },
+        "flip": {
+          "start_s": 122.86000000002596,
+          "end_s": 138.32000000001918,
+          "max_throttle": 0.005632552971145576,
+          "max_throttle_cmd": 0.0,
+          "steps": 773
+        },
+        "boostback": {
+          "start_s": 138.32000000001915,
+          "end_s": 176.35999999998458,
+          "max_throttle": 0.38172291595643776,
+          "max_throttle_cmd": 0.3822807135672184,
+          "steps": 1902
+        },
+        "coast": {
+          "start_s": 176.35999999998455,
+          "end_s": 418.899999999764,
+          "max_throttle": 0.15810103247161,
+          "max_throttle_cmd": 0.0,
+          "steps": 12127
+        },
+        "entry_burn": {
+          "start_s": 418.899999999764,
+          "end_s": 446.0999999997393,
+          "max_throttle": 0.2719151882073791,
+          "max_throttle_cmd": 0.272226860068336,
+          "steps": 1360
+        },
+        "aero_glide": {
+          "start_s": 446.0999999997393,
+          "end_s": 537.0999999996566,
+          "max_throttle": 0.09468528774251615,
+          "max_throttle_cmd": 0.0,
+          "steps": 4550
+        },
+        "landing_burn": {
+          "start_s": 537.0999999996566,
+          "end_s": 566.8599999994844,
+          "max_throttle": 0.2011505759674706,
+          "max_throttle_cmd": 0.20163197755121318,
+          "steps": 1488
+        },
+        "touchdown_settle": {
+          "start_s": 566.859999999484,
+          "end_s": 571.8399999993667,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 36.44835800002966,
+      "wall_time_s": 215.05904208299995,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-14-gust-entry-burn",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 572.3739999993659,
+      "touchdown_time_s": 567.3719999994842,
+      "restarts_used": 3,
+      "main_remaining_kg": 2649.360170958476,
+      "rcs_remaining_kg": 270.85504033840846,
+      "position_error_m": 0.000752682161978536,
+      "pos_xy_m": [
+        0.0004952675543317274,
+        -0.0005667808100023788
+      ],
+      "vertical_foot_speed_m_s": 0.8349431746557382,
+      "horizontal_foot_speed_m_s": 0.001411547475267629,
+      "tilt_deg": 0.022622463377277004,
+      "contact_rate_deg_s": 0.005504678524766725,
+      "peak_dynamic_pressure_pa": 29419.902318521592,
+      "peak_heat_flux_w_m2": 14954.375902033973,
+      "peak_ascent_axial_g": 3.3701477316901793,
+      "peak_recovery_g": 3.833576589327967,
+      "peak_angular_rate_deg_s": 11.115133518360086,
+      "peak_angular_acceleration_deg_s2": 3.6325197155427835,
+      "peak_roll_deg": 0.22841932099356974,
+      "peak_fin_hinge_nm": 186.06762455974118,
+      "post_contact": {
+        "max_leg_stroke_m": 0.30852399123385416,
+        "max_leg_force_n": 27302.600552305183,
+        "max_contact_load_g": 1.209728386661476,
+        "max_tilt_deg": 0.7086960125748589,
+        "standing_stable": true,
+        "final_speed_m_s": 0.019494684680450475,
+        "final_tilt_deg": 0.5282575549115102
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 707.0346816944657,
+        "mean_radius_altitude_km": 704.4255530608762,
+        "mean_eccentricity": 0.00029128196276893755,
+        "upper_propellant_remaining_kg": 560.8880952790846,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898571489484,
+        "peak_ground_effect_n": 5265.440433480931,
+        "peak_dual_slosh_force_n": 178947.45489605237
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.08000000002606,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6154
+        },
+        "flip": {
+          "start_s": 123.08000000002608,
+          "end_s": 138.54000000001898,
+          "max_throttle": 0.005632916237523134,
+          "max_throttle_cmd": 0.0,
+          "steps": 773
+        },
+        "boostback": {
+          "start_s": 138.54000000001895,
+          "end_s": 175.21999999998562,
+          "max_throttle": 0.3817781046142543,
+          "max_throttle_cmd": 0.38233766031039834,
+          "steps": 1834
+        },
+        "coast": {
+          "start_s": 175.2199999999856,
+          "end_s": 419.9399999997631,
+          "max_throttle": 0.1604063664230937,
+          "max_throttle_cmd": 0.0,
+          "steps": 12236
+        },
+        "entry_burn": {
+          "start_s": 419.9399999997631,
+          "end_s": 447.33999999973815,
+          "max_throttle": 0.27592426237283113,
+          "max_throttle_cmd": 0.27624146277479766,
+          "steps": 1370
+        },
+        "aero_glide": {
+          "start_s": 447.33999999973815,
+          "end_s": 537.4799999996562,
+          "max_throttle": 0.09591656482141685,
+          "max_throttle_cmd": 0.0,
+          "steps": 4507
+        },
+        "landing_burn": {
+          "start_s": 537.4799999996562,
+          "end_s": 567.379999999484,
+          "max_throttle": 0.20461440794958607,
+          "max_throttle_cmd": 0.20523592226822615,
+          "steps": 1495
+        },
+        "touchdown_settle": {
+          "start_s": 567.3799999994835,
+          "end_s": 572.3599999993662,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 76.16439200000968,
+      "wall_time_s": 344.06939299999993,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-15-gust-aero-glide",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 573.8079999993647,
+      "touchdown_time_s": 568.805999999483,
+      "restarts_used": 3,
+      "main_remaining_kg": 2617.4026713237326,
+      "rcs_remaining_kg": 269.82443380103354,
+      "position_error_m": 0.0008064135073196813,
+      "pos_xy_m": [
+        -0.0005785789135376758,
+        0.0005617376483708319
+      ],
+      "vertical_foot_speed_m_s": 0.8391145944314371,
+      "horizontal_foot_speed_m_s": 0.003304195339361741,
+      "tilt_deg": 0.02954624215702964,
+      "contact_rate_deg_s": 0.013790660434097308,
+      "peak_dynamic_pressure_pa": 29400.52633043793,
+      "peak_heat_flux_w_m2": 14556.118363892303,
+      "peak_ascent_axial_g": 3.3704118816617537,
+      "peak_recovery_g": 3.8336063373221316,
+      "peak_angular_rate_deg_s": 11.104526620492859,
+      "peak_angular_acceleration_deg_s2": 3.6467281924871657,
+      "peak_roll_deg": 0.27904563467457655,
+      "peak_fin_hinge_nm": 267.20706261620825,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3273586034955732,
+        "max_leg_force_n": 27391.253651903007,
+        "max_contact_load_g": 1.2134432667380213,
+        "max_tilt_deg": 1.10838490527503,
+        "standing_stable": true,
+        "final_speed_m_s": 0.029866733905821022,
+        "final_tilt_deg": 0.8237339904212052
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 705.1019190026448,
+        "mean_radius_altitude_km": 702.4990439526979,
+        "mean_eccentricity": 0.00029059259445002344,
+        "upper_propellant_remaining_kg": 563.250752493745,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579989896994406,
+        "peak_ground_effect_n": 5244.331303133114,
+        "peak_dual_slosh_force_n": 178969.96549985855
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.70000000002587,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6135
+        },
+        "flip": {
+          "start_s": 122.70000000002588,
+          "end_s": 138.06000000001941,
+          "max_throttle": 0.005631968681539255,
+          "max_throttle_cmd": 0.0,
+          "steps": 768
+        },
+        "boostback": {
+          "start_s": 138.0600000000194,
+          "end_s": 174.87999999998593,
+          "max_throttle": 0.38163899212685315,
+          "max_throttle_cmd": 0.38219411927239416,
+          "steps": 1841
+        },
+        "coast": {
+          "start_s": 174.8799999999859,
+          "end_s": 421.39999999976175,
+          "max_throttle": 0.1601098205515506,
+          "max_throttle_cmd": 0.0,
+          "steps": 12326
+        },
+        "entry_burn": {
+          "start_s": 421.39999999976175,
+          "end_s": 449.19999999973646,
+          "max_throttle": 0.2754191377991434,
+          "max_throttle_cmd": 0.27573612504305345,
+          "steps": 1390
+        },
+        "aero_glide": {
+          "start_s": 449.19999999973646,
+          "end_s": 538.9399999996549,
+          "max_throttle": 0.09357901821071576,
+          "max_throttle_cmd": 0.0,
+          "steps": 4487
+        },
+        "landing_burn": {
+          "start_s": 538.9399999996549,
+          "end_s": 568.8199999994827,
+          "max_throttle": 0.2032129146062424,
+          "max_throttle_cmd": 0.20377702155520436,
+          "steps": 1494
+        },
+        "touchdown_settle": {
+          "start_s": 568.8199999994822,
+          "end_s": 573.7999999993649,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 49.47340800003985,
+      "wall_time_s": 222.36129593099997,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-16-gust-terminal-pad",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 572.7659999993652,
+      "touchdown_time_s": 567.7639999994835,
+      "restarts_used": 3,
+      "main_remaining_kg": 2642.646027575779,
+      "rcs_remaining_kg": 270.1436453811111,
+      "position_error_m": 0.014244811558061477,
+      "pos_xy_m": [
+        0.004552634565794709,
+        -0.01349770998484606
+      ],
+      "vertical_foot_speed_m_s": 0.837940621146209,
+      "horizontal_foot_speed_m_s": 0.003721430507221407,
+      "tilt_deg": 0.01674966098134398,
+      "contact_rate_deg_s": 0.015106755370483258,
+      "peak_dynamic_pressure_pa": 29414.62913315225,
+      "peak_heat_flux_w_m2": 14863.90240390253,
+      "peak_ascent_axial_g": 3.37021277027125,
+      "peak_recovery_g": 3.8332775478664898,
+      "peak_angular_rate_deg_s": 11.11121092983126,
+      "peak_angular_acceleration_deg_s2": 3.534276558577518,
+      "peak_roll_deg": 0.20811327796175044,
+      "peak_fin_hinge_nm": 198.61978979112848,
+      "post_contact": {
+        "max_leg_stroke_m": 0.300529523719512,
+        "max_leg_force_n": 27274.60929199181,
+        "max_contact_load_g": 1.2114951446551039,
+        "max_tilt_deg": 0.4297270371172569,
+        "standing_stable": true,
+        "final_speed_m_s": 0.01063201096269394,
+        "final_tilt_deg": 0.3633283959484807
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.9866335346996,
+        "mean_radius_altitude_km": 702.375087913176,
+        "mean_eccentricity": 0.0002916574893263459,
+        "upper_propellant_remaining_kg": 560.3247918151228,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898654178325,
+        "peak_ground_effect_n": 5259.322525508592,
+        "peak_dual_slosh_force_n": 178953.56001903006
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.04000000002604,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6152
+        },
+        "flip": {
+          "start_s": 123.04000000002605,
+          "end_s": 138.500000000019,
+          "max_throttle": 0.0056324605330516885,
+          "max_throttle_cmd": 0.0,
+          "steps": 773
+        },
+        "boostback": {
+          "start_s": 138.50000000001899,
+          "end_s": 175.09999999998573,
+          "max_throttle": 0.38170608901180564,
+          "max_throttle_cmd": 0.3822633529510678,
+          "steps": 1830
+        },
+        "coast": {
+          "start_s": 175.0999999999857,
+          "end_s": 420.2399999997628,
+          "max_throttle": 0.16051039666630268,
+          "max_throttle_cmd": 0.0,
+          "steps": 12257
+        },
+        "entry_burn": {
+          "start_s": 420.2399999997628,
+          "end_s": 447.8399999997377,
+          "max_throttle": 0.2761074927266995,
+          "max_throttle_cmd": 0.2764250181759185,
+          "steps": 1380
+        },
+        "aero_glide": {
+          "start_s": 447.8399999997377,
+          "end_s": 537.8599999996559,
+          "max_throttle": 0.09502833195768595,
+          "max_throttle_cmd": 0.0,
+          "steps": 4501
+        },
+        "landing_burn": {
+          "start_s": 537.8599999996559,
+          "end_s": 567.7799999994832,
+          "max_throttle": 0.20406237337564734,
+          "max_throttle_cmd": 0.20468777333919339,
+          "steps": 1496
+        },
+        "touchdown_settle": {
+          "start_s": 567.7799999994827,
+          "end_s": 572.7599999993654,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 69.34845800003586,
+      "wall_time_s": 317.939286686,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-17-roll-pulse-coast-pos",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.1259999993672,
+      "touchdown_time_s": 566.1239999994855,
+      "restarts_used": 3,
+      "main_remaining_kg": 2562.5573961916425,
+      "rcs_remaining_kg": 274.94692208632637,
+      "position_error_m": 0.00030750937803513144,
+      "pos_xy_m": [
+        -0.0001113817154719146,
+        -0.0002866289082386612
+      ],
+      "vertical_foot_speed_m_s": 0.8387331100266858,
+      "horizontal_foot_speed_m_s": 0.008911987893724362,
+      "tilt_deg": 0.011824451617760563,
+      "contact_rate_deg_s": 0.04945819793583603,
+      "peak_dynamic_pressure_pa": 29403.04844362991,
+      "peak_heat_flux_w_m2": 15461.645378630845,
+      "peak_ascent_axial_g": 3.369666702993471,
+      "peak_recovery_g": 3.8324760730126624,
+      "peak_angular_rate_deg_s": 11.129372140329574,
+      "peak_angular_acceleration_deg_s2": 3.1586994593402404,
+      "peak_roll_deg": 0.10335462085977319,
+      "peak_fin_hinge_nm": 180.66931365481219,
+      "post_contact": {
+        "max_leg_stroke_m": 0.27423493086838807,
+        "max_leg_force_n": 26893.800401398832,
+        "max_contact_load_g": 1.2098918804387095,
+        "max_tilt_deg": 0.03396395391900245,
+        "standing_stable": true,
+        "final_speed_m_s": 0.005811740443104516,
+        "final_tilt_deg": 0.015336501098942228
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.9199455102869,
+        "mean_radius_altitude_km": 702.3007474490684,
+        "mean_eccentricity": 0.0002926549969451749,
+        "upper_propellant_remaining_kg": 590.9771582713347,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579989810643603,
+        "peak_ground_effect_n": 5216.534111952439,
+        "peak_dual_slosh_force_n": 178902.36222681252
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.10000000002607,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6155
+        },
+        "flip": {
+          "start_s": 123.10000000002609,
+          "end_s": 138.60000000001892,
+          "max_throttle": 0.005632175255222601,
+          "max_throttle_cmd": 0.0,
+          "steps": 775
+        },
+        "boostback": {
+          "start_s": 138.6000000000189,
+          "end_s": 176.73999999998424,
+          "max_throttle": 0.38166290662985997,
+          "max_throttle_cmd": 0.3822187951145881,
+          "steps": 1907
+        },
+        "coast": {
+          "start_s": 176.7399999999842,
+          "end_s": 417.99999999976484,
+          "max_throttle": 0.1579089689064834,
+          "max_throttle_cmd": 0.0,
+          "steps": 12063
+        },
+        "entry_burn": {
+          "start_s": 417.99999999976484,
+          "end_s": 444.79999999974046,
+          "max_throttle": 0.271553850911295,
+          "max_throttle_cmd": 0.27186474214230427,
+          "steps": 1340
+        },
+        "aero_glide": {
+          "start_s": 444.79999999974046,
+          "end_s": 536.3799999996572,
+          "max_throttle": 0.09665166801553375,
+          "max_throttle_cmd": 0.0,
+          "steps": 4579
+        },
+        "landing_burn": {
+          "start_s": 536.3799999996572,
+          "end_s": 566.1399999994851,
+          "max_throttle": 0.20138041420976963,
+          "max_throttle_cmd": 0.2020116660224951,
+          "steps": 1488
+        },
+        "touchdown_settle": {
+          "start_s": 566.1399999994846,
+          "end_s": 571.1199999993673,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 41.59449299993412,
+      "wall_time_s": 209.95118654099997,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-18-roll-pulse-coast-neg",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.1259999993672,
+      "touchdown_time_s": 566.1239999994855,
+      "restarts_used": 3,
+      "main_remaining_kg": 2562.5574649295872,
+      "rcs_remaining_kg": 274.9467616044283,
+      "position_error_m": 0.0003075018287452742,
+      "pos_xy_m": [
+        -0.00011137991892091461,
+        -0.00028662150711846173
+      ],
+      "vertical_foot_speed_m_s": 0.8387338474360355,
+      "horizontal_foot_speed_m_s": 0.00891199740504479,
+      "tilt_deg": 0.011824608228235996,
+      "contact_rate_deg_s": 0.04945838120001501,
+      "peak_dynamic_pressure_pa": 29403.04844362991,
+      "peak_heat_flux_w_m2": 15461.645378630845,
+      "peak_ascent_axial_g": 3.369666702993471,
+      "peak_recovery_g": 3.8324760729641527,
+      "peak_angular_rate_deg_s": 11.129372140329574,
+      "peak_angular_acceleration_deg_s2": 3.1586994593402404,
+      "peak_roll_deg": 0.10335472340223614,
+      "peak_fin_hinge_nm": 180.6697344385044,
+      "post_contact": {
+        "max_leg_stroke_m": 0.2742349475359429,
+        "max_leg_force_n": 26893.83307989507,
+        "max_contact_load_g": 1.2098933384572987,
+        "max_tilt_deg": 0.03396385047269991,
+        "standing_stable": true,
+        "final_speed_m_s": 0.005811681331162202,
+        "final_tilt_deg": 0.015336662863237455
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.9199455102869,
+        "mean_radius_altitude_km": 702.3007474490684,
+        "mean_eccentricity": 0.0002926549969451749,
+        "upper_propellant_remaining_kg": 590.9771582713347,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579989810643603,
+        "peak_ground_effect_n": 5216.533267546604,
+        "peak_dual_slosh_force_n": 178902.36222681252
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.10000000002607,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6155
+        },
+        "flip": {
+          "start_s": 123.10000000002609,
+          "end_s": 138.60000000001892,
+          "max_throttle": 0.005632175255222601,
+          "max_throttle_cmd": 0.0,
+          "steps": 775
+        },
+        "boostback": {
+          "start_s": 138.6000000000189,
+          "end_s": 176.73999999998424,
+          "max_throttle": 0.38166290662985997,
+          "max_throttle_cmd": 0.3822187951145881,
+          "steps": 1907
+        },
+        "coast": {
+          "start_s": 176.7399999999842,
+          "end_s": 417.99999999976484,
+          "max_throttle": 0.1579089689064834,
+          "max_throttle_cmd": 0.0,
+          "steps": 12063
+        },
+        "entry_burn": {
+          "start_s": 417.99999999976484,
+          "end_s": 444.79999999974046,
+          "max_throttle": 0.27155384726162946,
+          "max_throttle_cmd": 0.27186473848754916,
+          "steps": 1340
+        },
+        "aero_glide": {
+          "start_s": 444.79999999974046,
+          "end_s": 536.3799999996572,
+          "max_throttle": 0.09665166538916548,
+          "max_throttle_cmd": 0.0,
+          "steps": 4579
+        },
+        "landing_burn": {
+          "start_s": 536.3799999996572,
+          "end_s": 566.1399999994851,
+          "max_throttle": 0.20138041219350875,
+          "max_throttle_cmd": 0.20201166400679757,
+          "steps": 1488
+        },
+        "touchdown_settle": {
+          "start_s": 566.1399999994846,
+          "end_s": 571.1199999993673,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 57.360990000006495,
+      "wall_time_s": 349.093988406,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-19-roll-pulse-glide-pos",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.383999999367,
+      "touchdown_time_s": 566.3819999994853,
+      "restarts_used": 3,
+      "main_remaining_kg": 2581.29564483773,
+      "rcs_remaining_kg": 272.1746302298196,
+      "position_error_m": 0.0006838083046083767,
+      "pos_xy_m": [
+        7.39273525491111e-05,
+        -0.0006798003706945605
+      ],
+      "vertical_foot_speed_m_s": 0.838901862942532,
+      "horizontal_foot_speed_m_s": 0.004336789301617911,
+      "tilt_deg": 0.024305400054558016,
+      "contact_rate_deg_s": 0.024964168079429985,
+      "peak_dynamic_pressure_pa": 29401.955126931243,
+      "peak_heat_flux_w_m2": 15308.511990125928,
+      "peak_ascent_axial_g": 3.3697947599102585,
+      "peak_recovery_g": 3.833030980396925,
+      "peak_angular_rate_deg_s": 11.12633521672296,
+      "peak_angular_acceleration_deg_s2": 3.636019184510752,
+      "peak_roll_deg": 0.3844601877620774,
+      "peak_fin_hinge_nm": 226.57068430806916,
+      "post_contact": {
+        "max_leg_stroke_m": 0.30871133618634544,
+        "max_leg_force_n": 27167.468181541786,
+        "max_contact_load_g": 1.2118471159075017,
+        "max_tilt_deg": 0.5371549734585321,
+        "standing_stable": true,
+        "final_speed_m_s": 0.014047378096352063,
+        "final_tilt_deg": 0.38496485000381264
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 706.9657324842568,
+        "mean_radius_altitude_km": 704.3705737624699,
+        "mean_eccentricity": 0.00028953146653451907,
+        "upper_propellant_remaining_kg": 582.8997869172144,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898240295687,
+        "peak_ground_effect_n": 5224.900111340768,
+        "peak_dual_slosh_force_n": 178914.34908716142
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.04000000002604,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6152
+        },
+        "flip": {
+          "start_s": 123.04000000002605,
+          "end_s": 138.56000000001896,
+          "max_throttle": 0.005632870398217279,
+          "max_throttle_cmd": 0.0,
+          "steps": 776
+        },
+        "boostback": {
+          "start_s": 138.56000000001893,
+          "end_s": 176.37999999998456,
+          "max_throttle": 0.38176530790053903,
+          "max_throttle_cmd": 0.38232445688854516,
+          "steps": 1891
+        },
+        "coast": {
+          "start_s": 176.37999999998453,
+          "end_s": 418.55999999976433,
+          "max_throttle": 0.1584859987454314,
+          "max_throttle_cmd": 0.0,
+          "steps": 12109
+        },
+        "entry_burn": {
+          "start_s": 418.55999999976433,
+          "end_s": 445.5599999997398,
+          "max_throttle": 0.2725728077044109,
+          "max_throttle_cmd": 0.27288522534711174,
+          "steps": 1350
+        },
+        "aero_glide": {
+          "start_s": 445.5599999997398,
+          "end_s": 536.599999999657,
+          "max_throttle": 0.0962755610675777,
+          "max_throttle_cmd": 0.0,
+          "steps": 4552
+        },
+        "landing_burn": {
+          "start_s": 536.599999999657,
+          "end_s": 566.3999999994849,
+          "max_throttle": 0.20224747761616987,
+          "max_throttle_cmd": 0.20287338268034952,
+          "steps": 1490
+        },
+        "touchdown_settle": {
+          "start_s": 566.3999999994844,
+          "end_s": 571.3799999993671,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 37.34447800002272,
+      "wall_time_s": 221.14731117400004,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-20-roll-pulse-glide-neg",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.3779999993667,
+      "touchdown_time_s": 566.375999999485,
+      "restarts_used": 3,
+      "main_remaining_kg": 2580.198136012999,
+      "rcs_remaining_kg": 271.4346336074494,
+      "position_error_m": 0.0006827856657547435,
+      "pos_xy_m": [
+        7.810110464939084e-05,
+        0.0006783041226564182
+      ],
+      "vertical_foot_speed_m_s": 0.8367190714109689,
+      "horizontal_foot_speed_m_s": 0.0035707848043605786,
+      "tilt_deg": 0.024766186140728605,
+      "contact_rate_deg_s": 0.020233872037678232,
+      "peak_dynamic_pressure_pa": 29401.76729359887,
+      "peak_heat_flux_w_m2": 15302.796834481424,
+      "peak_ascent_axial_g": 3.3697971549148704,
+      "peak_recovery_g": 3.8330337257331295,
+      "peak_angular_rate_deg_s": 11.124559053275346,
+      "peak_angular_acceleration_deg_s2": 3.638416697400766,
+      "peak_roll_deg": 0.38008757058300335,
+      "peak_fin_hinge_nm": 468.82612073734487,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3086657613785618,
+        "max_leg_force_n": 27136.70132186857,
+        "max_contact_load_g": 1.2106467665970897,
+        "max_tilt_deg": 0.537309855487138,
+        "standing_stable": true,
+        "final_speed_m_s": 0.014087460387006524,
+        "final_tilt_deg": 0.3846970950764095
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 707.186926349597,
+        "mean_radius_altitude_km": 704.5503941389247,
+        "mean_eccentricity": 0.0002947955130619625,
+        "upper_propellant_remaining_kg": 582.8141178231022,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898310056266,
+        "peak_ground_effect_n": 5224.888888043884,
+        "peak_dual_slosh_force_n": 178914.86607180946
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.04000000002604,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6152
+        },
+        "flip": {
+          "start_s": 123.04000000002605,
+          "end_s": 138.6400000000189,
+          "max_throttle": 0.005632775920707782,
+          "max_throttle_cmd": 0.0,
+          "steps": 780
+        },
+        "boostback": {
+          "start_s": 138.64000000001886,
+          "end_s": 176.47999999998447,
+          "max_throttle": 0.38174039429853585,
+          "max_throttle_cmd": 0.38229875291728066,
+          "steps": 1892
+        },
+        "coast": {
+          "start_s": 176.47999999998444,
+          "end_s": 418.53999999976435,
+          "max_throttle": 0.15844193601743412,
+          "max_throttle_cmd": 0.0,
+          "steps": 12103
+        },
+        "entry_burn": {
+          "start_s": 418.53999999976435,
+          "end_s": 445.5399999997398,
+          "max_throttle": 0.272489587531851,
+          "max_throttle_cmd": 0.27280190955816963,
+          "steps": 1350
+        },
+        "aero_glide": {
+          "start_s": 445.5399999997398,
+          "end_s": 536.579999999657,
+          "max_throttle": 0.09613957963840288,
+          "max_throttle_cmd": 0.0,
+          "steps": 4552
+        },
+        "landing_burn": {
+          "start_s": 536.579999999657,
+          "end_s": 566.3799999994849,
+          "max_throttle": 0.20182086985822403,
+          "max_throttle_cmd": 0.202452749915565,
+          "steps": 1490
+        },
+        "touchdown_settle": {
+          "start_s": 566.3799999994844,
+          "end_s": 571.3599999993671,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 56.122999999956846,
+      "wall_time_s": 325.27429620400005,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-21-heavy-low-thrust",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 543.7339999994174,
+      "touchdown_time_s": 538.7319999995357,
+      "restarts_used": 3,
+      "main_remaining_kg": 2090.5639565711645,
+      "rcs_remaining_kg": 269.48017251748604,
+      "position_error_m": 0.003264697196501751,
+      "pos_xy_m": [
+        0.0014761238180275226,
+        -0.002911924837405362
+      ],
+      "vertical_foot_speed_m_s": 1.149311918842707,
+      "horizontal_foot_speed_m_s": 0.006112846787582599,
+      "tilt_deg": 0.03173531543392225,
+      "contact_rate_deg_s": 0.026721605180872195,
+      "peak_dynamic_pressure_pa": 31001.218506172863,
+      "peak_heat_flux_w_m2": 17691.58686017831,
+      "peak_ascent_axial_g": 3.227901457432407,
+      "peak_recovery_g": 3.6649773609458274,
+      "peak_angular_rate_deg_s": 11.16881322067091,
+      "peak_angular_acceleration_deg_s2": 3.3305404737401614,
+      "peak_roll_deg": 0.2716030046100443,
+      "peak_fin_hinge_nm": 153.32477989915034,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3089829119758772,
+        "max_leg_force_n": 31610.887854754434,
+        "max_contact_load_g": 1.3588784485031098,
+        "max_tilt_deg": 0.4068596972145817,
+        "standing_stable": true,
+        "final_speed_m_s": 0.017505840349896006,
+        "final_tilt_deg": 0.2775394752332641
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 705.0717180998419,
+        "mean_radius_altitude_km": 702.3042491479581,
+        "mean_eccentricity": 0.0003121970088834465,
+        "upper_propellant_remaining_kg": 667.5369075074095,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579989187244295,
+        "peak_ground_effect_n": 5649.349330132463,
+        "peak_dual_slosh_force_n": 171400.8961761043
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 125.72000000002741,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6286
+        },
+        "flip": {
+          "start_s": 125.72000000002743,
+          "end_s": 144.84000000001325,
+          "max_throttle": 0.0056323938368677,
+          "max_throttle_cmd": 0.0,
+          "steps": 956
+        },
+        "boostback": {
+          "start_s": 144.84000000001322,
+          "end_s": 192.91999999996952,
+          "max_throttle": 0.38175176335346056,
+          "max_throttle_cmd": 0.382300182628646,
+          "steps": 2404
+        },
+        "coast": {
+          "start_s": 192.9199999999695,
+          "end_s": 390.49999999978985,
+          "max_throttle": 0.14398933733046523,
+          "max_throttle_cmd": 0.0,
+          "steps": 9879
+        },
+        "entry_burn": {
+          "start_s": 390.49999999978985,
+          "end_s": 413.89999999976857,
+          "max_throttle": 0.2473765869334897,
+          "max_throttle_cmd": 0.24764407211460637,
+          "steps": 1170
+        },
+        "aero_glide": {
+          "start_s": 413.89999999976857,
+          "end_s": 511.23999999968004,
+          "max_throttle": 0.10226656144856783,
+          "max_throttle_cmd": 0.0,
+          "steps": 4867
+        },
+        "landing_burn": {
+          "start_s": 511.23999999968004,
+          "end_s": 538.7399999995355,
+          "max_throttle": 0.19874675694849925,
+          "max_throttle_cmd": 0.19982145407121996,
+          "steps": 1375
+        },
+        "touchdown_settle": {
+          "start_s": 538.739999999535,
+          "end_s": 543.7199999994177,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 34.41079300000638,
+      "wall_time_s": 216.71096188599995,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-22-light-high-thrust",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 585.2019999993472,
+      "touchdown_time_s": 580.1999999994655,
+      "restarts_used": 3,
+      "main_remaining_kg": 2849.825706294791,
+      "rcs_remaining_kg": 277.3610099051316,
+      "position_error_m": 0.0002999210747761858,
+      "pos_xy_m": [
+        8.232386614873957e-05,
+        -0.0002884015120578026
+      ],
+      "vertical_foot_speed_m_s": 0.6095613862360841,
+      "horizontal_foot_speed_m_s": 0.0061912019233037255,
+      "tilt_deg": 0.021463759694951325,
+      "contact_rate_deg_s": 0.0369556582303239,
+      "peak_dynamic_pressure_pa": 27791.981853412064,
+      "peak_heat_flux_w_m2": 14918.340009619034,
+      "peak_ascent_axial_g": 3.5161604991674604,
+      "peak_recovery_g": 4.143126572790017,
+      "peak_angular_rate_deg_s": 11.077745129681901,
+      "peak_angular_acceleration_deg_s2": 3.9690647011721985,
+      "peak_roll_deg": 0.27931666113075193,
+      "peak_fin_hinge_nm": 457.3544443258899,
+      "post_contact": {
+        "max_leg_stroke_m": 0.27834411466516573,
+        "max_leg_force_n": 24771.44816392699,
+        "max_contact_load_g": 1.1788911446378043,
+        "max_tilt_deg": 0.3339046245972311,
+        "standing_stable": true,
+        "final_speed_m_s": 0.007500901563244036,
+        "final_tilt_deg": 0.20156953422005372
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.5845754627669,
+        "mean_radius_altitude_km": 702.2200038443804,
+        "mean_eccentricity": 0.00026304516963666507,
+        "upper_propellant_remaining_kg": 593.2616187086469,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579990279756777,
+        "peak_ground_effect_n": 4697.3943689933085,
+        "peak_dual_slosh_force_n": 186451.3585521669
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 120.74000000002486,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6037
+        },
+        "flip": {
+          "start_s": 120.74000000002488,
+          "end_s": 135.8800000000214,
+          "max_throttle": 0.005632844977819138,
+          "max_throttle_cmd": 0.0,
+          "steps": 757
+        },
+        "boostback": {
+          "start_s": 135.88000000002137,
+          "end_s": 170.01999999999035,
+          "max_throttle": 0.38167386458565145,
+          "max_throttle_cmd": 0.382239462603875,
+          "steps": 1707
+        },
+        "coast": {
+          "start_s": 170.01999999999032,
+          "end_s": 431.5399999997525,
+          "max_throttle": 0.16331185334516699,
+          "max_throttle_cmd": 0.0,
+          "steps": 13076
+        },
+        "entry_burn": {
+          "start_s": 431.5399999997525,
+          "end_s": 458.33999999972815,
+          "max_throttle": 0.28096039503546355,
+          "max_throttle_cmd": 0.28129152432515003,
+          "steps": 1340
+        },
+        "aero_glide": {
+          "start_s": 458.33999999972815,
+          "end_s": 549.7599999996451,
+          "max_throttle": 0.10075623530583919,
+          "max_throttle_cmd": 0.0,
+          "steps": 4571
+        },
+        "landing_burn": {
+          "start_s": 549.7599999996451,
+          "end_s": 580.1999999994655,
+          "max_throttle": 0.19722560640048328,
+          "max_throttle_cmd": 0.19741909448764297,
+          "steps": 1522
+        },
+        "touchdown_settle": {
+          "start_s": 580.199999999465,
+          "end_s": 585.1999999993473,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 250
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 56.62864500004616,
+      "wall_time_s": 344.81623371399996,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-23-maxq-cold-dense",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 569.9599999993679,
+      "touchdown_time_s": 564.9579999994862,
+      "restarts_used": 3,
+      "main_remaining_kg": 2503.41487252285,
+      "rcs_remaining_kg": 275.4152295157426,
+      "position_error_m": 0.0006045986804483239,
+      "pos_xy_m": [
+        -0.0005524185653380236,
+        0.000245709774062275
+      ],
+      "vertical_foot_speed_m_s": 0.8346844677856303,
+      "horizontal_foot_speed_m_s": 0.0014750385507095718,
+      "tilt_deg": 0.019316902307710562,
+      "contact_rate_deg_s": 0.010405513738706062,
+      "peak_dynamic_pressure_pa": 31758.582345198363,
+      "peak_heat_flux_w_m2": 15422.245943897022,
+      "peak_ascent_axial_g": 3.372588853244839,
+      "peak_recovery_g": 3.8225790808723383,
+      "peak_angular_rate_deg_s": 11.01146016402194,
+      "peak_angular_acceleration_deg_s2": 3.6474750117367685,
+      "peak_roll_deg": 0.03235444345480313,
+      "peak_fin_hinge_nm": 200.24461652424995,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3084888925829283,
+        "max_leg_force_n": 26891.202349616527,
+        "max_contact_load_g": 1.2088565868694998,
+        "max_tilt_deg": 0.5664947329433755,
+        "standing_stable": true,
+        "final_speed_m_s": 0.013330071596995853,
+        "final_tilt_deg": 0.40236857362732004
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.3262461910481,
+        "mean_radius_altitude_km": 701.725195443931,
+        "mean_eccentricity": 0.0002903913576838156,
+        "upper_propellant_remaining_kg": 580.1034014138249,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579990180634236,
+        "peak_ground_effect_n": 5183.8411944711215,
+        "peak_dual_slosh_force_n": 179125.4397330844
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.00000000002602,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6150
+        },
+        "flip": {
+          "start_s": 123.00000000002603,
+          "end_s": 138.4000000000191,
+          "max_throttle": 0.005632359695933564,
+          "max_throttle_cmd": 0.0,
+          "steps": 770
+        },
+        "boostback": {
+          "start_s": 138.40000000001908,
+          "end_s": 176.0199999999849,
+          "max_throttle": 0.3817129086580467,
+          "max_throttle_cmd": 0.38227038752692705,
+          "steps": 1881
+        },
+        "coast": {
+          "start_s": 176.01999999998486,
+          "end_s": 422.83999999976044,
+          "max_throttle": 0.15879783512820408,
+          "max_throttle_cmd": 0.0,
+          "steps": 12341
+        },
+        "entry_burn": {
+          "start_s": 422.83999999976044,
+          "end_s": 454.03999999973206,
+          "max_throttle": 0.2731317743391261,
+          "max_throttle_cmd": 0.27344733624410794,
+          "steps": 1560
+        },
+        "aero_glide": {
+          "start_s": 454.03999999973206,
+          "end_s": 535.3399999996582,
+          "max_throttle": 0.04797569283436711,
+          "max_throttle_cmd": 0.0,
+          "steps": 4065
+        },
+        "landing_burn": {
+          "start_s": 535.3399999996582,
+          "end_s": 564.9599999994862,
+          "max_throttle": 0.19760541814463173,
+          "max_throttle_cmd": 0.1983145093260661,
+          "steps": 1481
+        },
+        "touchdown_settle": {
+          "start_s": 564.9599999994857,
+          "end_s": 569.9399999993684,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 36.49306800002705,
+      "wall_time_s": 218.96628861300007,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-24-thin-hot-low-drag",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 565.7939999993719,
+      "touchdown_time_s": 560.7919999994901,
+      "restarts_used": 3,
+      "main_remaining_kg": 2528.659916600902,
+      "rcs_remaining_kg": 273.3070446765448,
+      "position_error_m": 0.0006371391059727163,
+      "pos_xy_m": [
+        0.00018681266021790992,
+        0.0006091364956575989
+      ],
+      "vertical_foot_speed_m_s": 0.836715760986896,
+      "horizontal_foot_speed_m_s": 0.008385144991123424,
+      "tilt_deg": 0.021987716750458394,
+      "contact_rate_deg_s": 0.048618609549406146,
+      "peak_dynamic_pressure_pa": 28476.974139695707,
+      "peak_heat_flux_w_m2": 16472.97652199619,
+      "peak_ascent_axial_g": 3.369212480658306,
+      "peak_recovery_g": 3.8371472274402807,
+      "peak_angular_rate_deg_s": 11.091698794331112,
+      "peak_angular_acceleration_deg_s2": 3.6830173970724602,
+      "peak_roll_deg": 0.2774051643511777,
+      "peak_fin_hinge_nm": 496.89898821987964,
+      "post_contact": {
+        "max_leg_stroke_m": 0.2993397257208122,
+        "max_leg_force_n": 26771.265166839068,
+        "max_contact_load_g": 1.2098451453925072,
+        "max_tilt_deg": 0.4258675391504048,
+        "standing_stable": true,
+        "final_speed_m_s": 0.011399380098841116,
+        "final_tilt_deg": 0.24379574036136134
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.1464943226082,
+        "mean_radius_altitude_km": 701.6141523146806,
+        "mean_eccentricity": 0.0002819675372754525,
+        "upper_propellant_remaining_kg": 582.7752670723644,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799896436738303,
+        "peak_ground_effect_n": 5200.61233704819,
+        "peak_dual_slosh_force_n": 178897.36762560395
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.74000000002589,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6137
+        },
+        "flip": {
+          "start_s": 122.7400000000259,
+          "end_s": 139.58000000001803,
+          "max_throttle": 0.0056327814663335975,
+          "max_throttle_cmd": 0.0,
+          "steps": 842
+        },
+        "boostback": {
+          "start_s": 139.580000000018,
+          "end_s": 177.13999999998387,
+          "max_throttle": 0.3817437682973185,
+          "max_throttle_cmd": 0.3823022329366658,
+          "steps": 1878
+        },
+        "coast": {
+          "start_s": 177.13999999998384,
+          "end_s": 421.2199999997619,
+          "max_throttle": 0.15891142704438976,
+          "max_throttle_cmd": 0.0,
+          "steps": 12204
+        },
+        "entry_burn": {
+          "start_s": 421.2199999997619,
+          "end_s": 447.4199999997381,
+          "max_throttle": 0.2733216331984089,
+          "max_throttle_cmd": 0.2736338538905642,
+          "steps": 1310
+        },
+        "aero_glide": {
+          "start_s": 447.4199999997381,
+          "end_s": 530.4799999996626,
+          "max_throttle": 0.10797497660506339,
+          "max_throttle_cmd": 0.0,
+          "steps": 4153
+        },
+        "landing_burn": {
+          "start_s": 530.4799999996626,
+          "end_s": 560.79999999949,
+          "max_throttle": 0.21313344775724324,
+          "max_throttle_cmd": 0.21368279934655443,
+          "steps": 1516
+        },
+        "touchdown_settle": {
+          "start_s": 560.7999999994895,
+          "end_s": 565.7799999993722,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 56.91385000000082,
+      "wall_time_s": 325.748816951,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-25-equator-coriolis",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 575.0759999993634,
+      "touchdown_time_s": 570.0739999994817,
+      "restarts_used": 3,
+      "main_remaining_kg": 2628.95563950216,
+      "rcs_remaining_kg": 269.4911391585209,
+      "position_error_m": 0.0008142264126247119,
+      "pos_xy_m": [
+        -0.0005869914854617002,
+        -0.0005642744429895565
+      ],
+      "vertical_foot_speed_m_s": 0.8360625341231669,
+      "horizontal_foot_speed_m_s": 0.0029070574276453195,
+      "tilt_deg": 0.029543996979459874,
+      "contact_rate_deg_s": 0.014129591112780664,
+      "peak_dynamic_pressure_pa": 29400.979532286565,
+      "peak_heat_flux_w_m2": 14480.610810010852,
+      "peak_ascent_axial_g": 3.3705336296771846,
+      "peak_recovery_g": 3.8317158255023314,
+      "peak_angular_rate_deg_s": 11.097351174951445,
+      "peak_angular_acceleration_deg_s2": 3.667077923296002,
+      "peak_roll_deg": 0.281641629607861,
+      "peak_fin_hinge_nm": 200.9225944589645,
+      "post_contact": {
+        "max_leg_stroke_m": 0.32717123774445783,
+        "max_leg_force_n": 27338.298719275488,
+        "max_contact_load_g": 1.2094568923977995,
+        "max_tilt_deg": 1.1080566487918844,
+        "standing_stable": true,
+        "final_speed_m_s": 0.029961905237946087,
+        "final_tilt_deg": 0.8235213554854164
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 701.8747686721795,
+        "mean_radius_altitude_km": 701.8747600614242,
+        "mean_eccentricity": 1.6177787802223649e-09,
+        "upper_propellant_remaining_kg": 665.1008456844147,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799899162015827,
+        "peak_ground_effect_n": 5242.953051222123,
+        "peak_dual_slosh_force_n": 178981.1820478703
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.68000000002586,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6134
+        },
+        "flip": {
+          "start_s": 122.68000000002587,
+          "end_s": 138.04000000001943,
+          "max_throttle": 0.005632573583828237,
+          "max_throttle_cmd": 0.0,
+          "steps": 768
+        },
+        "boostback": {
+          "start_s": 138.0400000000194,
+          "end_s": 174.63999999998614,
+          "max_throttle": 0.3817316796691847,
+          "max_throttle_cmd": 0.3822897558463263,
+          "steps": 1830
+        },
+        "coast": {
+          "start_s": 174.63999999998612,
+          "end_s": 422.7799999997605,
+          "max_throttle": 0.16052150585300456,
+          "max_throttle_cmd": 0.0,
+          "steps": 12407
+        },
+        "entry_burn": {
+          "start_s": 422.7799999997605,
+          "end_s": 450.779999999735,
+          "max_throttle": 0.27613734920124433,
+          "max_throttle_cmd": 0.2764554465188086,
+          "steps": 1400
+        },
+        "aero_glide": {
+          "start_s": 450.779999999735,
+          "end_s": 540.2199999996537,
+          "max_throttle": 0.09357901607220154,
+          "max_throttle_cmd": 0.0,
+          "steps": 4472
+        },
+        "landing_burn": {
+          "start_s": 540.2199999996537,
+          "end_s": 570.0799999994815,
+          "max_throttle": 0.20371564722379648,
+          "max_throttle_cmd": 0.2043399603113789,
+          "steps": 1493
+        },
+        "touchdown_settle": {
+          "start_s": 570.0799999994811,
+          "end_s": 575.0599999993638,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 34.51292199997624,
+      "wall_time_s": 185.30705236000006,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-26-south-pole-zero-rot",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 568.6499999993694,
+      "touchdown_time_s": 563.6479999994876,
+      "restarts_used": 3,
+      "main_remaining_kg": 2594.852536464659,
+      "rcs_remaining_kg": 270.3097052491014,
+      "position_error_m": 0.0005370346473895658,
+      "pos_xy_m": [
+        0.000185734321159068,
+        -0.0005038938126633581
+      ],
+      "vertical_foot_speed_m_s": 0.8371408042922756,
+      "horizontal_foot_speed_m_s": 0.004697312787248093,
+      "tilt_deg": 0.015151065895589582,
+      "contact_rate_deg_s": 0.02722272760237362,
+      "peak_dynamic_pressure_pa": 29415.27419002021,
+      "peak_heat_flux_w_m2": 15275.005624831887,
+      "peak_ascent_axial_g": 3.3697284531961733,
+      "peak_recovery_g": 3.8366520307953738,
+      "peak_angular_rate_deg_s": 11.122625334956036,
+      "peak_angular_acceleration_deg_s2": 3.629267203545633,
+      "peak_roll_deg": 0.22531043504684742,
+      "peak_fin_hinge_nm": 459.301882831859,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3080948357310501,
+        "max_leg_force_n": 27199.674668218526,
+        "max_contact_load_g": 1.2124968016615856,
+        "max_tilt_deg": 0.7115539056175336,
+        "standing_stable": true,
+        "final_speed_m_s": 0.016066282979044916,
+        "final_tilt_deg": 0.5213801161775521
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 712.8510125960996,
+        "mean_radius_altitude_km": 705.0617919086982,
+        "mean_eccentricity": 0.0008801895743839627,
+        "upper_propellant_remaining_kg": 204.61813186065046,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579989807340754,
+        "peak_ground_effect_n": 5250.254206693017,
+        "peak_dual_slosh_force_n": 178909.63366978025
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.08000000002606,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6154
+        },
+        "flip": {
+          "start_s": 123.08000000002608,
+          "end_s": 138.76000000001878,
+          "max_throttle": 0.005632866784019381,
+          "max_throttle_cmd": 0.0,
+          "steps": 784
+        },
+        "boostback": {
+          "start_s": 138.76000000001875,
+          "end_s": 176.61999999998434,
+          "max_throttle": 0.38174627483344875,
+          "max_throttle_cmd": 0.3823048218444269,
+          "steps": 1893
+        },
+        "coast": {
+          "start_s": 176.61999999998432,
+          "end_s": 415.69999999976693,
+          "max_throttle": 0.15841106243755126,
+          "max_throttle_cmd": 0.0,
+          "steps": 11954
+        },
+        "entry_burn": {
+          "start_s": 415.69999999976693,
+          "end_s": 442.29999999974274,
+          "max_throttle": 0.27244696871497714,
+          "max_throttle_cmd": 0.2727586654445737,
+          "steps": 1330
+        },
+        "aero_glide": {
+          "start_s": 442.29999999974274,
+          "end_s": 533.8199999996596,
+          "max_throttle": 0.0984103245545501,
+          "max_throttle_cmd": 0.0,
+          "steps": 4576
+        },
+        "landing_burn": {
+          "start_s": 533.8199999996596,
+          "end_s": 563.6599999994874,
+          "max_throttle": 0.20306728990047296,
+          "max_throttle_cmd": 0.2036924055425014,
+          "steps": 1492
+        },
+        "touchdown_settle": {
+          "start_s": 563.6599999994869,
+          "end_s": 568.6399999993696,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 58.01487599990196,
+      "wall_time_s": 346.01776880400007,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-27-noisy-mekf-dropouts",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.9179999993657,
+      "touchdown_time_s": 566.915999999484,
+      "restarts_used": 3,
+      "main_remaining_kg": 2593.5892554137436,
+      "rcs_remaining_kg": 183.66615187851005,
+      "position_error_m": 0.06189992951331132,
+      "pos_xy_m": [
+        -0.0040695552492437835,
+        0.06176601002028755
+      ],
+      "vertical_foot_speed_m_s": 0.8942478294587834,
+      "horizontal_foot_speed_m_s": 0.022715581036586645,
+      "tilt_deg": 0.011226716341855113,
+      "contact_rate_deg_s": 0.07912953605015183,
+      "peak_dynamic_pressure_pa": 29398.665444231054,
+      "peak_heat_flux_w_m2": 15264.60490540856,
+      "peak_ascent_axial_g": 3.36977934747676,
+      "peak_recovery_g": 3.8458772575884623,
+      "peak_angular_rate_deg_s": 11.136237353345772,
+      "peak_angular_acceleration_deg_s2": 4.078956350247521,
+      "peak_roll_deg": 0.2688934702102312,
+      "peak_fin_hinge_nm": 217.94527523218244,
+      "post_contact": {
+        "max_leg_stroke_m": 0.30627428546022073,
+        "max_leg_force_n": 26936.442431745472,
+        "max_contact_load_g": 1.219756842334347,
+        "max_tilt_deg": 0.725534300712627,
+        "standing_stable": true,
+        "final_speed_m_s": 0.018272565490310512,
+        "final_tilt_deg": 0.5006722159523869
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 705.9914865783286,
+        "mean_radius_altitude_km": 703.3870344712697,
+        "mean_eccentricity": 0.00029076208330072083,
+        "upper_propellant_remaining_kg": 589.5267249163817,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898127126596,
+        "peak_ground_effect_n": 5012.845690330648,
+        "peak_dual_slosh_force_n": 178925.0448180908
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.88000000002596,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6144
+        },
+        "flip": {
+          "start_s": 122.88000000002597,
+          "end_s": 138.38000000001912,
+          "max_throttle": 0.005629414810546156,
+          "max_throttle_cmd": 0.0,
+          "steps": 775
+        },
+        "boostback": {
+          "start_s": 138.3800000000191,
+          "end_s": 176.51999999998444,
+          "max_throttle": 0.3811759111733044,
+          "max_throttle_cmd": 0.3817166163898293,
+          "steps": 1907
+        },
+        "coast": {
+          "start_s": 176.5199999999844,
+          "end_s": 418.87999999976404,
+          "max_throttle": 0.1576729370759021,
+          "max_throttle_cmd": 0.0,
+          "steps": 12118
+        },
+        "entry_burn": {
+          "start_s": 418.87999999976404,
+          "end_s": 445.8799999997395,
+          "max_throttle": 0.2699125841759424,
+          "max_throttle_cmd": 0.2702214921193188,
+          "steps": 1350
+        },
+        "aero_glide": {
+          "start_s": 445.8799999997395,
+          "end_s": 537.2199999996565,
+          "max_throttle": 0.09435230759613422,
+          "max_throttle_cmd": 0.0,
+          "steps": 4567
+        },
+        "landing_burn": {
+          "start_s": 537.2199999996565,
+          "end_s": 566.9199999994839,
+          "max_throttle": 0.20049573235044388,
+          "max_throttle_cmd": 0.20091110839457602,
+          "steps": 1485
+        },
+        "touchdown_settle": {
+          "start_s": 566.9199999994835,
+          "end_s": 571.8999999993662,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 37.81420900008925,
+      "wall_time_s": 221.755108564,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-28-harsh-imu-delays",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 572.9439999993638,
+      "touchdown_time_s": 567.941999999482,
+      "restarts_used": 3,
+      "main_remaining_kg": 2710.205373767743,
+      "rcs_remaining_kg": 137.6260947135768,
+      "position_error_m": 0.04665314446564183,
+      "pos_xy_m": [
+        -0.041352298874158304,
+        0.021598686681239043
+      ],
+      "vertical_foot_speed_m_s": 0.99641282125551,
+      "horizontal_foot_speed_m_s": 0.1365626906387122,
+      "tilt_deg": 0.02869689579511983,
+      "contact_rate_deg_s": 0.12006171917871948,
+      "peak_dynamic_pressure_pa": 29422.735523693875,
+      "peak_heat_flux_w_m2": 14884.068770189024,
+      "peak_ascent_axial_g": 3.371478909944202,
+      "peak_recovery_g": 3.8315421528322355,
+      "peak_angular_rate_deg_s": 11.106577380121227,
+      "peak_angular_acceleration_deg_s2": 4.736979255125886,
+      "peak_roll_deg": 0.2639106359288185,
+      "peak_fin_hinge_nm": 216.79055226869886,
+      "post_contact": {
+        "max_leg_stroke_m": 0.317422295985466,
+        "max_leg_force_n": 28884.124403280974,
+        "max_contact_load_g": 1.2475873227127094,
+        "max_tilt_deg": 0.8063873044412521,
+        "standing_stable": true,
+        "final_speed_m_s": 0.00853415257607502,
+        "final_tilt_deg": 0.4362290344653842
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 705.9090023066476,
+        "mean_radius_altitude_km": 703.3035488213608,
+        "mean_eccentricity": 0.00029085941173326204,
+        "upper_propellant_remaining_kg": 560.4562136250015,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.579989867797824,
+        "peak_ground_effect_n": 5358.278981187163,
+        "peak_dual_slosh_force_n": 179031.8053986491
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 123.08000000002606,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6154
+        },
+        "flip": {
+          "start_s": 123.08000000002608,
+          "end_s": 138.66000000001887,
+          "max_throttle": 0.0034153535726425014,
+          "max_throttle_cmd": 0.0,
+          "steps": 779
+        },
+        "boostback": {
+          "start_s": 138.66000000001884,
+          "end_s": 175.29999999998554,
+          "max_throttle": 0.3811905503936101,
+          "max_throttle_cmd": 0.38172871870012676,
+          "steps": 1832
+        },
+        "coast": {
+          "start_s": 175.29999999998552,
+          "end_s": 420.41999999976264,
+          "max_throttle": 0.16015135244349693,
+          "max_throttle_cmd": 0.0,
+          "steps": 12256
+        },
+        "entry_burn": {
+          "start_s": 420.41999999976264,
+          "end_s": 447.8199999997377,
+          "max_throttle": 0.2735971176706401,
+          "max_throttle_cmd": 0.2739106469905257,
+          "steps": 1370
+        },
+        "aero_glide": {
+          "start_s": 447.8199999997377,
+          "end_s": 538.0399999996557,
+          "max_throttle": 0.09360291406628807,
+          "max_throttle_cmd": 0.0,
+          "steps": 4511
+        },
+        "landing_burn": {
+          "start_s": 538.0399999996557,
+          "end_s": 567.9799999994812,
+          "max_throttle": 0.2025544921045574,
+          "max_throttle_cmd": 0.20310159045471932,
+          "steps": 1497
+        },
+        "touchdown_settle": {
+          "start_s": 567.9799999994807,
+          "end_s": 572.9399999993639,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 248
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 56.929744000058236,
+      "wall_time_s": 329.679755473,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-29-combined-crosswind-roll-imu",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 565.5039999993719,
+      "touchdown_time_s": 560.5019999994902,
+      "restarts_used": 3,
+      "main_remaining_kg": 2455.1098264585353,
+      "rcs_remaining_kg": 185.96893257881473,
+      "position_error_m": 0.06983544303645048,
+      "pos_xy_m": [
+        0.06976290645075019,
+        0.0031821357043968785
+      ],
+      "vertical_foot_speed_m_s": 0.8388559516892431,
+      "horizontal_foot_speed_m_s": 0.02812953090663469,
+      "tilt_deg": 0.025101162531075014,
+      "contact_rate_deg_s": 0.0414410724693565,
+      "peak_dynamic_pressure_pa": 30157.825261154125,
+      "peak_heat_flux_w_m2": 16939.984539817367,
+      "peak_ascent_axial_g": 3.333911676388182,
+      "peak_recovery_g": 3.8423247187710836,
+      "peak_angular_rate_deg_s": 11.166230547203066,
+      "peak_angular_acceleration_deg_s2": 3.849610348864534,
+      "peak_roll_deg": 0.27582812579581933,
+      "peak_fin_hinge_nm": 521.1906993430741,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3180719982052592,
+        "max_leg_force_n": 26491.98988076978,
+        "max_contact_load_g": 1.210043791604695,
+        "max_tilt_deg": 0.9922379173967721,
+        "standing_stable": true,
+        "final_speed_m_s": 0.021338844451643767,
+        "final_tilt_deg": 0.6696816707372206
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 704.69406728777,
+        "mean_radius_altitude_km": 702.0086842247117,
+        "mean_eccentricity": 0.00030122573089594914,
+        "upper_propellant_remaining_kg": 661.8094837004573,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799895019089645,
+        "peak_ground_effect_n": 5182.118202607553,
+        "peak_dual_slosh_force_n": 176916.4408357594
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 124.06000000002656,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6203
+        },
+        "flip": {
+          "start_s": 124.06000000002658,
+          "end_s": 140.76000000001696,
+          "max_throttle": 0.005629249197804762,
+          "max_throttle_cmd": 0.0,
+          "steps": 835
+        },
+        "boostback": {
+          "start_s": 140.76000000001693,
+          "end_s": 183.39999999997818,
+          "max_throttle": 0.38116989406290047,
+          "max_throttle_cmd": 0.3817064531910099,
+          "steps": 2132
+        },
+        "coast": {
+          "start_s": 183.39999999997815,
+          "end_s": 406.5199999997753,
+          "max_throttle": 0.15101642136882334,
+          "max_throttle_cmd": 0.0,
+          "steps": 11156
+        },
+        "entry_burn": {
+          "start_s": 406.5199999997753,
+          "end_s": 430.9199999997531,
+          "max_throttle": 0.2584157306308826,
+          "max_throttle_cmd": 0.2587047917622778,
+          "steps": 1220
+        },
+        "aero_glide": {
+          "start_s": 430.9199999997531,
+          "end_s": 531.139999999662,
+          "max_throttle": 0.10331121094729115,
+          "max_throttle_cmd": 0.0,
+          "steps": 5011
+        },
+        "landing_burn": {
+          "start_s": 531.139999999662,
+          "end_s": 560.5199999994898,
+          "max_throttle": 0.19231832596708043,
+          "max_throttle_cmd": 0.19323900077584363,
+          "steps": 1469
+        },
+        "touchdown_settle": {
+          "start_s": 560.5199999994893,
+          "end_s": 565.499999999372,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 28275,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 22.204181999995853,
+      "wall_time_s": 219.40178613600006,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1",
+      "replay_exported_path": "/kaggle/working/dm100_3d_outputs/replays/edge3d-29-combined-crosswind-roll-imu_50hz.json"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-30-combined-heavy-shear-nightmare",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 557.3019999993935,
+      "touchdown_time_s": 552.2999999995118,
+      "restarts_used": 3,
+      "main_remaining_kg": 2320.121092046101,
+      "rcs_remaining_kg": 186.11128223106454,
+      "position_error_m": 0.04437495108338521,
+      "pos_xy_m": [
+        0.02918024419219386,
+        -0.033431267288823605
+      ],
+      "vertical_foot_speed_m_s": 1.0776363071351385,
+      "horizontal_foot_speed_m_s": 0.03643618597001429,
+      "tilt_deg": 0.03776390131717384,
+      "contact_rate_deg_s": 0.08590578297983929,
+      "peak_dynamic_pressure_pa": 30503.5812677757,
+      "peak_heat_flux_w_m2": 15947.026394079723,
+      "peak_ascent_axial_g": 3.2601821126309143,
+      "peak_recovery_g": 3.702114062851385,
+      "peak_angular_rate_deg_s": 11.152529420868674,
+      "peak_angular_acceleration_deg_s2": 3.7807184503711113,
+      "peak_roll_deg": 0.25802299187919897,
+      "peak_fin_hinge_nm": 286.9813467457049,
+      "post_contact": {
+        "max_leg_stroke_m": 0.36536145511885076,
+        "max_leg_force_n": 29864.685387252073,
+        "max_contact_load_g": 1.276963342029844,
+        "max_tilt_deg": 1.728706793514413,
+        "standing_stable": true,
+        "final_speed_m_s": 0.04094152227401381,
+        "final_tilt_deg": 1.2190523749623314
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 705.8390135454833,
+        "mean_radius_altitude_km": 703.113459696386,
+        "mean_eccentricity": 0.0003065407164946425,
+        "upper_propellant_remaining_kg": 611.5289345281417,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799893941926743,
+        "peak_ground_effect_n": 5613.133287673129,
+        "peak_dual_slosh_force_n": 173141.4080704093
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 124.74000000002691,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6237
+        },
+        "flip": {
+          "start_s": 124.74000000002692,
+          "end_s": 141.3800000000164,
+          "max_throttle": 0.005628802997425469,
+          "max_throttle_cmd": 0.0,
+          "steps": 832
+        },
+        "boostback": {
+          "start_s": 141.38000000001637,
+          "end_s": 184.41999999997725,
+          "max_throttle": 0.38113557796624875,
+          "max_throttle_cmd": 0.38166736834602294,
+          "steps": 2152
+        },
+        "coast": {
+          "start_s": 184.41999999997722,
+          "end_s": 404.69999999977694,
+          "max_throttle": 0.1510288079583826,
+          "max_throttle_cmd": 0.0,
+          "steps": 11014
+        },
+        "entry_burn": {
+          "start_s": 404.69999999977694,
+          "end_s": 430.6999999997533,
+          "max_throttle": 0.2584760809631706,
+          "max_throttle_cmd": 0.25876330566840233,
+          "steps": 1300
+        },
+        "aero_glide": {
+          "start_s": 430.6999999997533,
+          "end_s": 523.6599999996688,
+          "max_throttle": 0.09478931156733371,
+          "max_throttle_cmd": 0.0,
+          "steps": 4648
+        },
+        "landing_burn": {
+          "start_s": 523.6599999996688,
+          "end_s": 552.2999999995118,
+          "max_throttle": 0.20066097705939318,
+          "max_throttle_cmd": 0.2016579875875072,
+          "steps": 1432
+        },
+        "touchdown_settle": {
+          "start_s": 552.2999999995113,
+          "end_s": 557.2999999993935,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 250
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 57.05136999995375,
+      "wall_time_s": 348.885578582,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-31-combined-light-thin-nightmare",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 577.4439999993538,
+      "touchdown_time_s": 572.441999999472,
+      "restarts_used": 3,
+      "main_remaining_kg": 2769.2151761513655,
+      "rcs_remaining_kg": 177.33519860708475,
+      "position_error_m": 0.030598513439171485,
+      "pos_xy_m": [
+        0.009105803257835894,
+        -0.029212212715176905
+      ],
+      "vertical_foot_speed_m_s": 0.5994795415341584,
+      "horizontal_foot_speed_m_s": 0.08496015237728564,
+      "tilt_deg": 0.04402423340145502,
+      "contact_rate_deg_s": 0.17000660703958714,
+      "peak_dynamic_pressure_pa": 28067.470393089574,
+      "peak_heat_flux_w_m2": 15259.854744036196,
+      "peak_ascent_axial_g": 3.4829150928333923,
+      "peak_recovery_g": 3.9934599974131992,
+      "peak_angular_rate_deg_s": 11.068400601946706,
+      "peak_angular_acceleration_deg_s2": 4.833690928809594,
+      "peak_roll_deg": 0.26751921955312247,
+      "peak_fin_hinge_nm": 403.56272135684407,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3202116151925757,
+        "max_leg_force_n": 26202.669333419362,
+        "max_contact_load_g": 1.1793626243274442,
+        "max_tilt_deg": 1.2853634416493473,
+        "standing_stable": true,
+        "final_speed_m_s": 0.018036322618198493,
+        "final_tilt_deg": 0.8909452838386122
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 705.4251174046016,
+        "mean_radius_altitude_km": 703.0009724576818,
+        "mean_eccentricity": 0.0002694739887755391,
+        "upper_propellant_remaining_kg": 595.655804612712,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799901955914595,
+        "peak_ground_effect_n": 4857.3889592412925,
+        "peak_dual_slosh_force_n": 184850.3509145247
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 121.64000000002532,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6082
+        },
+        "flip": {
+          "start_s": 121.64000000002534,
+          "end_s": 137.02000000002036,
+          "max_throttle": 0.005629184477114415,
+          "max_throttle_cmd": 0.0,
+          "steps": 769
+        },
+        "boostback": {
+          "start_s": 137.02000000002033,
+          "end_s": 172.0399999999885,
+          "max_throttle": 0.38105837290660477,
+          "max_throttle_cmd": 0.3816026125680944,
+          "steps": 1751
+        },
+        "coast": {
+          "start_s": 172.03999999998848,
+          "end_s": 429.6999999997542,
+          "max_throttle": 0.16175552040257585,
+          "max_throttle_cmd": 0.0,
+          "steps": 12883
+        },
+        "entry_burn": {
+          "start_s": 429.6999999997542,
+          "end_s": 456.89999999972946,
+          "max_throttle": 0.2768421177727671,
+          "max_throttle_cmd": 0.2771663720874649,
+          "steps": 1360
+        },
+        "aero_glide": {
+          "start_s": 456.89999999972946,
+          "end_s": 542.0199999996521,
+          "max_throttle": 0.09605894727918536,
+          "max_throttle_cmd": 0.0,
+          "steps": 4256
+        },
+        "landing_burn": {
+          "start_s": 542.0199999996521,
+          "end_s": 572.4599999994716,
+          "max_throttle": 0.19834217082129077,
+          "max_throttle_cmd": 0.19879835056253237,
+          "steps": 1522
+        },
+        "touchdown_settle": {
+          "start_s": 572.4599999994712,
+          "end_s": 577.4399999993539,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 249
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 36.97531800003162,
+      "wall_time_s": 218.11391728500007,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    },
+    {
+      "version": "dm100_3d_mujoco",
+      "scenario": "edge3d-32-combined-pole-gust-roll",
+      "outcome": "landed",
+      "requirements_passed": true,
+      "criteria": {
+        "dynamic_pressure": true,
+        "entry_heat_flux": true,
+        "ascent_q_alpha": true,
+        "ascent_high_q_alpha": true,
+        "ascent_axial_g": true,
+        "flight_load_g": true,
+        "angular_rate": true,
+        "angular_acceleration": true,
+        "gimbal": true,
+        "fin_hinge": true,
+        "feed_inventory": true,
+        "slosh_domain": true,
+        "separation": true,
+        "upper_stage_orbit": true,
+        "touchdown": true,
+        "leg_stroke": true,
+        "leg_force": true,
+        "contact_load_g": true,
+        "engine_off_standing": true
+      },
+      "failed_criteria": [],
+      "flight_time_s": 571.2619999993658,
+      "touchdown_time_s": 566.2599999994841,
+      "restarts_used": 3,
+      "main_remaining_kg": 2610.2629630828924,
+      "rcs_remaining_kg": 179.07301188700706,
+      "position_error_m": 0.06695299592440918,
+      "pos_xy_m": [
+        -0.01326528081350926,
+        0.06562572657268409
+      ],
+      "vertical_foot_speed_m_s": 0.7957508920433275,
+      "horizontal_foot_speed_m_s": 0.09049076949552136,
+      "tilt_deg": 0.011835192582371683,
+      "contact_rate_deg_s": 0.05124527656085372,
+      "peak_dynamic_pressure_pa": 29399.511202321457,
+      "peak_heat_flux_w_m2": 14894.073236269825,
+      "peak_ascent_axial_g": 3.3700003554837026,
+      "peak_recovery_g": 3.842841688320613,
+      "peak_angular_rate_deg_s": 11.120760733918116,
+      "peak_angular_acceleration_deg_s2": 4.169193707809579,
+      "peak_roll_deg": 0.2553815282999691,
+      "peak_fin_hinge_nm": 230.68696079735105,
+      "post_contact": {
+        "max_leg_stroke_m": 0.3284693079340868,
+        "max_leg_force_n": 27475.347463123813,
+        "max_contact_load_g": 1.2072593640099718,
+        "max_tilt_deg": 1.1012051800092195,
+        "standing_stable": true,
+        "final_speed_m_s": 0.029129666782340417,
+        "final_tilt_deg": 0.7893746831883335
+      },
+      "upper_stage_orbit": {
+        "orbit_inserted": true,
+        "final_apogee_km": 712.8115541504482,
+        "mean_radius_altitude_km": 705.6164748011875,
+        "mean_eccentricity": 0.0008111516813621843,
+        "upper_propellant_remaining_kg": 311.9601665229816,
+        "replay_samples_count": 1251
+      },
+      "physics_v2_metrics": {
+        "peak_srp_drag_reduction": 0.5799898281887114,
+        "peak_ground_effect_n": 5312.325459443559,
+        "peak_dual_slosh_force_n": 178945.79309779868
+      },
+      "phases": {
+        "ascent": {
+          "start_s": 0.0,
+          "end_s": 122.74000000002589,
+          "max_throttle": 0.9999999999999998,
+          "max_throttle_cmd": 1.0,
+          "steps": 6137
+        },
+        "flip": {
+          "start_s": 122.7400000000259,
+          "end_s": 138.26000000001923,
+          "max_throttle": 0.005629395798802235,
+          "max_throttle_cmd": 0.0,
+          "steps": 776
+        },
+        "boostback": {
+          "start_s": 138.2600000000192,
+          "end_s": 175.97999999998493,
+          "max_throttle": 0.3811656896204032,
+          "max_throttle_cmd": 0.38170583141711634,
+          "steps": 1886
+        },
+        "coast": {
+          "start_s": 175.9799999999849,
+          "end_s": 418.1599999997647,
+          "max_throttle": 0.1583692079903674,
+          "max_throttle_cmd": 0.0,
+          "steps": 12109
+        },
+        "entry_burn": {
+          "start_s": 418.1599999997647,
+          "end_s": 445.35999999973996,
+          "max_throttle": 0.27106695105213474,
+          "max_throttle_cmd": 0.2713778254272152,
+          "steps": 1360
+        },
+        "aero_glide": {
+          "start_s": 445.35999999973996,
+          "end_s": 536.4799999996571,
+          "max_throttle": 0.09423412635259178,
+          "max_throttle_cmd": 0.0,
+          "steps": 4556
+        },
+        "landing_burn": {
+          "start_s": 536.4799999996571,
+          "end_s": 566.2599999994841,
+          "max_throttle": 0.2000067016863528,
+          "max_throttle_cmd": 0.20032120230574169,
+          "steps": 1489
+        },
+        "touchdown_settle": {
+          "start_s": 566.2599999994836,
+          "end_s": 571.2599999993658,
+          "max_throttle": 0.0,
+          "max_throttle_cmd": 0.0,
+          "steps": 250
+        }
+      },
+      "replay_frame_count": 0,
+      "socp_solver_used": true,
+      "socp_solver_status": "optimal",
+      "socp_solve_ms": 57.609296000009635,
+      "wall_time_s": 323.19446406300005,
+      "physics_v2_preset": "m1",
+      "gnc_v2_preset": "m1"
+    }
+  ]
+}

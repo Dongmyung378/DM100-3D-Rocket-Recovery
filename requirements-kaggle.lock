@@ -1,0 +1,7 @@
+# Pinned Kaggle CPU validation runtime dependencies for reproducible DM100 3D v2 shards
+# Generated from verified local .venv (Python 3.12/3.13 manylinux wheel compatible)
+clarabel==0.11.1
+mujoco==3.17.0
+numpy==2.5.5
+PyYAML==6.0.4
+scipy==1.18.1

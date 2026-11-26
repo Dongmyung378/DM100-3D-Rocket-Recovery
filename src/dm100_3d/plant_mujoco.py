@@ -21,6 +21,7 @@ from dm100_3d.config import (
     EARTH_RADIUS_M,
     G0,
     DM100VehicleConfig,
+    DualTankGeometry,
     MassProperties3D,
     mass_properties_3d,
 )
@@ -153,6 +154,10 @@ class MuJoCoRocketBody:
         upper_attached: bool = False,
         airframe_mass_offset_kg: float = 0.0,
         inertia_scale: float = 1.0,
+        inertia_roll_scale: float | None = None,
+        dual_tank: bool = False,
+        rcs_propellant_kg: float | None = None,
+        dual_tank_geom: DualTankGeometry | None = None,
         struts_active: bool | None = None,
     ) -> MassProperties3D:
         """Update booster mass, COM, 3-axis inertia, and leg deployment via `mj_setConst`.
@@ -175,6 +180,10 @@ class MuJoCoRocketBody:
             upper_attached=upper_attached,
             airframe_mass_offset_kg=airframe_mass_offset_kg,
             inertia_scale=inertia_scale,
+            inertia_roll_scale=inertia_roll_scale,
+            dual_tank=dual_tank,
+            rcs_propellant_kg=rcs_propellant_kg,
+            dual_tank_geom=dual_tank_geom,
         )
 
         # Update leg mount positions and contact/spring activation
@@ -421,17 +430,22 @@ class MuJoCoRocketBody:
         force_world_n: ArrayLike = (0.0, 0.0, 0.0),
         torque_world_nm: ArrayLike = (0.0, 0.0, 0.0),
         altitude_for_gravity_m: float | None = None,
+        gravity_m_s2: float | None = None,
     ) -> None:
         """Advance MuJoCo RK4 physics by one step `dt_s` with world force/torque at COM."""
         self.model.opt.timestep = float(dt_s)
-        z_grav = (
-            float(self.data.xipos[self.booster_bid, 2])
-            if altitude_for_gravity_m is None
-            else float(altitude_for_gravity_m)
-        )
+        if gravity_m_s2 is not None:
+            g_mag = float(gravity_m_s2)
+        else:
+            z_grav = (
+                float(self.data.xipos[self.booster_bid, 2])
+                if altitude_for_gravity_m is None
+                else float(altitude_for_gravity_m)
+            )
+            g_mag = fast_gravity(z_grav)
         self.model.opt.gravity[0] = 0.0
         self.model.opt.gravity[1] = 0.0
-        self.model.opt.gravity[2] = -fast_gravity(z_grav)
+        self.model.opt.gravity[2] = -g_mag
 
         self.data.xfrc_applied[:] = 0.0
         f_w = np.asarray(force_world_n, dtype=np.float64).reshape(3)

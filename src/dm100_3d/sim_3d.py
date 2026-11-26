@@ -17,7 +17,14 @@ from math import degrees, exp, hypot, isfinite, radians
 
 import numpy as np
 
-from dm100_3d.config import G0, DM100VehicleConfig, mass_properties_3d
+from dm100_3d.config import (
+    G0,
+    R_AIR,
+    DM100VehicleConfig,
+    GncV2Config,
+    PhysicsV2Config,
+    mass_properties_3d,
+)
 from dm100_3d.coords import (
     axis_angle_to_quat_wxyz,
     base_to_com_pos_enu,
@@ -40,18 +47,27 @@ from dm100_3d.mjcf.builder import LEG_UNIT_DIRS
 from dm100_3d.physics import (
     Atmosphere3DSettings,
     AtmosphereLUT,
+    DualTankSloshSettings,
+    DualTankSloshState,
     FeedSettings,
     FeedState,
+    GroundEffect3DSettings,
     IgnitionSettings,
     Separation3DSettings,
     Slosh3DSettings,
     Slosh3DState,
+    Srp3DSettings,
+    SrpBuffetFilter,
     UpperStageOrbitResult,
     Wind3DConfig,
     Wind3DLUT,
     compute_coriolis_and_centrifugal_3d,
     compute_engine_thrust_3d,
     compute_forces_and_torques_3d,
+    compute_ground_effect_3d,
+    compute_srp_effects,
+    dual_slosh_3d_response,
+    dual_slosh_body_offset_3d,
     evaluate_upper_stage_orbit_3d,
     feed_rates,
     ignition_ready,
@@ -59,6 +75,8 @@ from dm100_3d.physics import (
     separation_event_3d,
     slosh_3d_response,
     slosh_body_offset_3d,
+    wgs84_coriolis_and_transport_enu,
+    wgs84_normal_gravity,
 )
 from dm100_3d.plant_mujoco import MuJoCoRocketBody, fast_gravity
 
@@ -87,6 +105,8 @@ class SimConfig3D:
     record_replay: bool = True
     seed: int = 378
     sensor_seed: int = 1378
+    physics_v2: PhysicsV2Config = field(default_factory=PhysicsV2Config)
+    gnc_v2: GncV2Config = field(default_factory=GncV2Config)
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,15 +137,42 @@ class MuJoCoPlant3D:
             seed=self.scenario.seed, sensor_seed=self.scenario.seed + 1000
         )
 
+        self.physics_v2 = self.config.physics_v2
+        pv2 = self.physics_v2
+
         self.atmo_lut = AtmosphereLUT(self.scenario.atmosphere, step_m=100.0)
         self.wind_lut = Wind3DLUT(self.scenario.wind, forecast=False)
-        self.feed_settings = FeedSettings()
+        self.feed_settings = (
+            FeedSettings.dual_tank_v2(pv2.dual_tank_geometry)
+            if pv2.dual_tank_slosh
+            else FeedSettings()
+        )
         self.ignition_settings = IgnitionSettings()
         self.slosh_settings = Slosh3DSettings()
+        self.dual_slosh_settings = DualTankSloshSettings(
+            geometry=pv2.dual_tank_geometry,
+            damping_scale=pv2.slosh_baffle_damping_scale,
+        )
+        self.srp_settings = Srp3DSettings(
+            shield_scale=pv2.srp_shield_scale,
+            buffet_enabled=pv2.srp_buffet_enabled,
+            cm_rms_peak=pv2.srp_cm_rms_peak,
+        )
+        self.srp_buffet_filter = (
+            SrpBuffetFilter(seed=self.config.seed) if pv2.srp_interference else None
+        )
+        self.ground_effect_settings = GroundEffect3DSettings(
+            c_ge=pv2.ground_effect_coeff,
+            c_lat=pv2.ground_effect_lat_coeff,
+        )
         self.separation_settings = Separation3DSettings()
 
         dist = self.scenario.disturbances
         self.airframe_mass_offset_kg = (dist.initial_mass_scale - 1.0) * self.vehicle.launch_mass_kg
+        if pv2.booster_dry_mass_scale != 1.0:
+            self.airframe_mass_offset_kg += (
+                pv2.booster_dry_mass_scale - 1.0
+            ) * self.vehicle.booster_dry_mass_kg
         self.actual_dry_mass_kg = self.vehicle.booster_dry_mass_kg + self.airframe_mass_offset_kg
         self.engine_tau_s = max(self.vehicle.propulsion.nominal_engine_tau_s, dist.engine_lag_s)
 
@@ -134,6 +181,10 @@ class MuJoCoPlant3D:
         self.rcs_prop_kg: float = self.vehicle.propellant.rcs_propellant_kg
         self.feed_state: FeedState = initial_feed_state(self.main_prop_kg, self.feed_settings)
         self.slosh_state: Slosh3DState = Slosh3DState()
+        self.dual_slosh_state: DualTankSloshState = DualTankSloshState()
+        self.peak_srp_drag_reduction: float = 0.0
+        self.peak_ground_effect_n: float = 0.0
+        self.peak_dual_slosh_force_n: float = 0.0
 
         self.gear_extension: float = 0.0
         self.fin_extension: float = 0.0
@@ -165,6 +216,9 @@ class MuJoCoPlant3D:
             upper_attached=True,
             airframe_mass_offset_kg=self.airframe_mass_offset_kg,
             inertia_scale=dist.inertia_scale,
+            dual_tank=pv2.dual_tank_slosh,
+            rcs_propellant_kg=self.rcs_prop_kg if pv2.dual_tank_slosh else None,
+            dual_tank_geom=pv2.dual_tank_geometry if pv2.dual_tank_slosh else None,
             struts_active=False,
         )
         p0 = base_to_com_pos_enu(
@@ -385,6 +439,7 @@ class MuJoCoPlant3D:
 
         # Execute 6DOF momentum-conserving cold stage separation
         dist = self.scenario.disturbances
+        pv2 = self.physics_v2
         tot_m = self._total_mass()
         u_m = self.vehicle.upper_stage.total_mass_kg
         b_m = tot_m - u_m
@@ -395,6 +450,9 @@ class MuJoCoPlant3D:
             upper_attached=False,
             airframe_mass_offset_kg=self.airframe_mass_offset_kg,
             inertia_scale=dist.inertia_scale,
+            dual_tank=pv2.dual_tank_slosh,
+            rcs_propellant_kg=self.rcs_prop_kg if pv2.dual_tank_slosh else None,
+            dual_tank_geom=pv2.dual_tank_geometry if pv2.dual_tank_slosh else None,
         )
         r = self.vehicle.geometry.body_radius_m
         u_l = self.vehicle.geometry.upper_length_m
@@ -423,6 +481,9 @@ class MuJoCoPlant3D:
             upper_attached=False,
             airframe_mass_offset_kg=self.airframe_mass_offset_kg,
             inertia_scale=dist.inertia_scale,
+            dual_tank=pv2.dual_tank_slosh,
+            rcs_propellant_kg=self.rcs_prop_kg if pv2.dual_tank_slosh else None,
+            dual_tank_geom=pv2.dual_tank_geometry if pv2.dual_tank_slosh else None,
             struts_active=False,
         )
         self.body.set_pose_from_com(
@@ -445,6 +506,7 @@ class MuJoCoPlant3D:
             latitude_deg=self.scenario.atmosphere.latitude_deg,
             settings=self.vehicle.upper_stage,
             replay_hz=self.config.replay_hz,
+            use_wgs84_j2=pv2.earth_wgs84_j2,
         )
         self.separation_record = {
             "time_s": self.time_s,
@@ -560,6 +622,7 @@ class MuJoCoPlant3D:
 
         # Dynamic mass/COM/3-axis inertia update via scratch MjData (10 Hz or on gear/strut change)
         dist = self.scenario.disturbances
+        pv2 = self.physics_v2
         struts_on = (
             (not self.upper_attached) and (self.gear_extension >= 0.85) and (float(p_c0[2]) < 45.0)
         )
@@ -574,6 +637,9 @@ class MuJoCoPlant3D:
                 upper_attached=self.upper_attached,
                 airframe_mass_offset_kg=self.airframe_mass_offset_kg,
                 inertia_scale=dist.inertia_scale,
+                dual_tank=pv2.dual_tank_slosh,
+                rcs_propellant_kg=self.rcs_prop_kg if pv2.dual_tank_slosh else None,
+                dual_tank_geom=pv2.dual_tank_geometry if pv2.dual_tank_slosh else None,
                 struts_active=struts_on,
             )
             self._last_mass_update_s = self.time_s
@@ -654,9 +720,50 @@ class MuJoCoPlant3D:
                 if (self.rcs_prop_kg > 0.0 and self.touchdown_time_s is None)
                 else (0.0, 0.0, 0.0)
             )
-            b_off = slosh_body_offset_3d(
-                tot_m, self.main_prop_kg, self.slosh_state, self.slosh_settings
-            )
+            if pv2.dual_tank_slosh:
+                b_off = dual_slosh_body_offset_3d(
+                    tot_m, self.main_prop_kg, self.dual_slosh_state, self.dual_slosh_settings
+                )
+            else:
+                b_off = slosh_body_offset_3d(
+                    tot_m, self.main_prop_kg, self.slosh_state, self.slosh_settings
+                )
+
+            srp_drag_mult = 1.0
+            srp_cp_shift = 0.0
+            srp_buffet_tau = (0.0, 0.0, 0.0)
+            if pv2.srp_interference and (not self.upper_attached) and self.engine_throttle > 1e-6:
+                t_k_s, p_pa_s, rho_s = self.atmo_lut.at(float(p_com[2]))
+                wx_s, wy_s, wz_s = self.wind_lut.at(float(p_com[2]), self.time_s)
+                v_rel_s = np.array(
+                    [float(v_com[0]) - wx_s, float(v_com[1]) - wy_s, float(v_com[2]) - wz_s],
+                    dtype=np.float64,
+                )
+                spd_s = float(np.linalg.norm(v_rel_s))
+                if spd_s > 1.0:
+                    q_s = 0.5 * rho_s * spd_s * spd_s
+                    mach_s = spd_s / np.sqrt(1.4 * R_AIR * t_k_s)
+                    vz_b_s = float((r_wb.T @ v_rel_s)[2])
+                    t_est_s, _ = compute_engine_thrust_3d(
+                        self.engine_throttle, p_pa_s, self.vehicle, thrust_scale=dist.thrust_scale
+                    )
+                    srp_eff = compute_srp_effects(
+                        mach=float(mach_s),
+                        v_air_zb_m_s=vz_b_s,
+                        thrust_n=t_est_s * delivered_ratio,
+                        dynamic_pressure_pa=q_s,
+                        body_radius_m=self.vehicle.geometry.body_radius_m,
+                        dt_s=dt,
+                        upper_attached=self.upper_attached,
+                        settings=self.srp_settings,
+                        buffet_filter=self.srp_buffet_filter,
+                    )
+                    srp_drag_mult = srp_eff.drag_multiplier
+                    srp_cp_shift = srp_eff.delta_z_cp_m
+                    srp_buffet_tau = srp_eff.buffet_torque_body_nm
+                    self.peak_srp_drag_reduction = max(
+                        self.peak_srp_drag_reduction, 1.0 - srp_drag_mult
+                    )
 
             ft = compute_forces_and_torques_3d(
                 altitude_m=float(p_com[2]),
@@ -683,11 +790,15 @@ class MuJoCoPlant3D:
                 drag_scale=dist.drag_scale,
                 delivered_ratio=delivered_ratio,
                 body_offset_body_m=b_off,
+                axial_drag_multiplier=srp_drag_mult,
+                cp_shift_m=srp_cp_shift,
             )
             last_ft = ft
 
-            # Optional external 3D roll disturbance pulse (0.5 s smooth onset/decay envelope)
+            # Optional external 3D roll disturbance pulse + SRP buffeting + ground effect
             tau_b = np.asarray(ft.torque_body_nm, dtype=np.float64)
+            if srp_buffet_tau != (0.0, 0.0, 0.0):
+                tau_b = tau_b + np.asarray(srp_buffet_tau, dtype=np.float64)
             if (
                 dist.roll_disturbance_torque_nm != 0.0
                 and dist.roll_disturbance_start_s
@@ -700,35 +811,109 @@ class MuJoCoPlant3D:
                 env = u_env * u_env * (3.0 - 2.0 * u_env)
                 tau_b[2] += dist.roll_disturbance_torque_nm * env
 
-            # 2-DOF spherical pendulum slosh response
             f_w_ext = np.asarray(ft.force_world_n, dtype=np.float64)
-            a_proper_b = r_wb.T @ (f_w_ext / max(tot_m, 1.0))
-            self._last_accel_body = a_proper_b
-            tank_st = self.vehicle.geometry.tank_bottom_m + 0.5 * mp.fuel_height_m
-            sl_resp = slosh_3d_response(
-                total_mass_kg=tot_m,
-                rigid_inertia_diag_kg_m2=mp.inertia_diag_kg_m2,
-                main_propellant_kg=self.main_prop_kg,
-                station_offset_m=tank_st - mp.cg_station_m,
-                proper_accel_body_m_s2=a_proper_b,
-                external_torque_body_nm=tau_b,
-                omega_body_rad_s=om_b,
-                state=self.slosh_state,
-                settings=self.slosh_settings,
-            )
-            if not sl_resp.valid:
-                self.slosh_domain_ok = False
-            tau_b = tau_b + np.asarray(sl_resp.slosh_torque_body_nm, dtype=np.float64)
+            if (
+                pv2.ground_effect
+                and (not self.upper_attached)
+                and ft.thrust_n > 1.0
+                and float(p_com[2]) < 35.0
+            ):
+                ge = compute_ground_effect_3d(
+                    pos_com_enu_m=p_com,
+                    rot_wb=r_wb,
+                    cg_station_m=mp.cg_station_m,
+                    nozzle_station_m=self.vehicle.geometry.nozzle_station_m,
+                    thrust_n=ft.thrust_n,
+                    upper_attached=self.upper_attached,
+                    settings=self.ground_effect_settings,
+                )
+                if ge.cushion_force_n > 0.0:
+                    f_w_ext = f_w_ext + np.asarray(ge.force_world_n, dtype=np.float64)
+                    tau_b = tau_b + np.asarray(ge.torque_body_nm, dtype=np.float64)
+                    self.peak_ground_effect_n = max(self.peak_ground_effect_n, ge.cushion_force_n)
 
-            # Integrate slosh (symplectic midpoint) & propellant inventories
-            qxd_new = self.slosh_state.qxd_m_s + sl_resp.qdd_m_s2[0] * dt
-            qyd_new = self.slosh_state.qyd_m_s + sl_resp.qdd_m_s2[1] * dt
-            self.slosh_state = Slosh3DState(
-                qx_m=self.slosh_state.qx_m + 0.5 * (self.slosh_state.qxd_m_s + qxd_new) * dt,
-                qy_m=self.slosh_state.qy_m + 0.5 * (self.slosh_state.qyd_m_s + qyd_new) * dt,
-                qxd_m_s=qxd_new,
-                qyd_m_s=qyd_new,
-            )
+            # Slosh response (v2 dual-tank 3x3 coupled vs legacy v1 single-tank)
+            # In v2, include the MuJoCo ground normal/friction reaction force in proper
+            # acceleration while in contact so resting/standing tanks experience true +1 g
+            # restoring & multi-ring baffle damping instead of fake zero-g on the pad.
+            f_proper_w = f_w_ext
+            if (
+                (pv2.dual_tank_slosh or pv2.sensors_v2)
+                and in_contact_zone
+                and self._last_contact.any_contact
+            ):
+                f_proper_w = f_w_ext + np.asarray(
+                    self._last_contact.force_world_n, dtype=np.float64
+                )
+            a_proper_b = r_wb.T @ (f_proper_w / max(tot_m, 1.0))
+            self._last_accel_body = a_proper_b
+            if pv2.dual_tank_slosh:
+                dsl = dual_slosh_3d_response(
+                    total_mass_kg=tot_m,
+                    rigid_inertia_diag_kg_m2=mp.inertia_diag_kg_m2,
+                    main_propellant_kg=self.main_prop_kg,
+                    cg_station_m=mp.cg_station_m,
+                    proper_accel_body_m_s2=a_proper_b,
+                    external_torque_body_nm=tau_b,
+                    omega_body_rad_s=om_b,
+                    state=self.dual_slosh_state,
+                    settings=self.dual_slosh_settings,
+                )
+                if not dsl.valid:
+                    self.slosh_domain_ok = False
+                self.peak_dual_slosh_force_n = max(
+                    self.peak_dual_slosh_force_n, dsl.constraint_force_n
+                )
+                tau_b = tau_b + np.asarray(dsl.slosh_torque_body_nm, dtype=np.float64)
+
+                # Integrate both LOX and CH4 spherical pendulums (symplectic midpoint)
+                s_lox = self.dual_slosh_state.lox
+                lox_qxd = s_lox.qxd_m_s + dsl.lox_qdd_m_s2[0] * dt
+                lox_qyd = s_lox.qyd_m_s + dsl.lox_qdd_m_s2[1] * dt
+                s_ch4 = self.dual_slosh_state.ch4
+                ch4_qxd = s_ch4.qxd_m_s + dsl.ch4_qdd_m_s2[0] * dt
+                ch4_qyd = s_ch4.qyd_m_s + dsl.ch4_qdd_m_s2[1] * dt
+                self.dual_slosh_state = DualTankSloshState(
+                    lox=Slosh3DState(
+                        qx_m=s_lox.qx_m + 0.5 * (s_lox.qxd_m_s + lox_qxd) * dt,
+                        qy_m=s_lox.qy_m + 0.5 * (s_lox.qyd_m_s + lox_qyd) * dt,
+                        qxd_m_s=lox_qxd,
+                        qyd_m_s=lox_qyd,
+                    ),
+                    ch4=Slosh3DState(
+                        qx_m=s_ch4.qx_m + 0.5 * (s_ch4.qxd_m_s + ch4_qxd) * dt,
+                        qy_m=s_ch4.qy_m + 0.5 * (s_ch4.qyd_m_s + ch4_qyd) * dt,
+                        qxd_m_s=ch4_qxd,
+                        qyd_m_s=ch4_qyd,
+                    ),
+                )
+            else:
+                tank_st = self.vehicle.geometry.tank_bottom_m + 0.5 * mp.fuel_height_m
+                sl_resp = slosh_3d_response(
+                    total_mass_kg=tot_m,
+                    rigid_inertia_diag_kg_m2=mp.inertia_diag_kg_m2,
+                    main_propellant_kg=self.main_prop_kg,
+                    station_offset_m=tank_st - mp.cg_station_m,
+                    proper_accel_body_m_s2=a_proper_b,
+                    external_torque_body_nm=tau_b,
+                    omega_body_rad_s=om_b,
+                    state=self.slosh_state,
+                    settings=self.slosh_settings,
+                )
+                if not sl_resp.valid:
+                    self.slosh_domain_ok = False
+                tau_b = tau_b + np.asarray(sl_resp.slosh_torque_body_nm, dtype=np.float64)
+
+                # Integrate slosh (symplectic midpoint)
+                qxd_new = self.slosh_state.qxd_m_s + sl_resp.qdd_m_s2[0] * dt
+                qyd_new = self.slosh_state.qyd_m_s + sl_resp.qdd_m_s2[1] * dt
+                self.slosh_state = Slosh3DState(
+                    qx_m=self.slosh_state.qx_m + 0.5 * (self.slosh_state.qxd_m_s + qxd_new) * dt,
+                    qy_m=self.slosh_state.qy_m + 0.5 * (self.slosh_state.qyd_m_s + qyd_new) * dt,
+                    qxd_m_s=qxd_new,
+                    qyd_m_s=qyd_new,
+                )
+
             self.main_prop_kg = max(0.0, self.main_prop_kg - fr.delivered_flow_kg_s * dt)
             self.rcs_prop_kg = max(0.0, self.rcs_prop_kg - ft.rcs_flow_kg_s * dt)
             self.feed_state = FeedState(
@@ -751,16 +936,31 @@ class MuJoCoPlant3D:
                 ),
             )
 
-            # Pad hold-down before TWR > 1
-            a_cor = compute_coriolis_and_centrifugal_3d(
-                altitude_m=float(p_com[2]),
-                vel_enu_m_s=v_com,
-                latitude_deg=self.scenario.atmosphere.latitude_deg,
-                coriolis_enabled=self.scenario.atmosphere.coriolis_enabled,
-                planar_coriolis_only=self.scenario.atmosphere.planar_coriolis_only,
-            )
+            # Pad hold-down before TWR > 1 & Coriolis / gravity
+            if pv2.earth_wgs84_j2:
+                a_cor = wgs84_coriolis_and_transport_enu(
+                    altitude_m=float(p_com[2]),
+                    vel_enu_m_s=v_com,
+                    latitude_deg=self.scenario.atmosphere.latitude_deg,
+                    coriolis_enabled=self.scenario.atmosphere.coriolis_enabled,
+                    planar_coriolis_only=self.scenario.atmosphere.planar_coriolis_only,
+                )
+                g_step = wgs84_normal_gravity(
+                    self.scenario.atmosphere.latitude_deg, float(p_com[2])
+                )
+            else:
+                a_cor = compute_coriolis_and_centrifugal_3d(
+                    altitude_m=float(p_com[2]),
+                    vel_enu_m_s=v_com,
+                    latitude_deg=self.scenario.atmosphere.latitude_deg,
+                    coriolis_enabled=self.scenario.atmosphere.coriolis_enabled,
+                    planar_coriolis_only=self.scenario.atmosphere.planar_coriolis_only,
+                )
+                g_step = None
+
             if self.on_pad and self.upper_attached:
-                if f_w_ext[2] > tot_m * fast_gravity(float(p_com[2])):
+                g_pad = g_step if g_step is not None else fast_gravity(float(p_com[2]))
+                if f_w_ext[2] > tot_m * g_pad:
                     self.on_pad = False
                 else:
                     self.time_s += dt
@@ -773,6 +973,7 @@ class MuJoCoPlant3D:
                 force_world_n=f_tot_w,
                 torque_world_nm=tau_w,
                 altitude_for_gravity_m=float(p_com[2]),
+                gravity_m_s2=g_step,
             )
             self.time_s += dt
 
@@ -1008,12 +1209,23 @@ class MuJoCoPlant3D:
                 {
                     "orbit_inserted": self.upper_orbit_result.orbit_inserted,
                     "final_apogee_km": self.upper_orbit_result.final_apogee_km,
+                    "mean_radius_altitude_km": self.upper_orbit_result.mean_radius_altitude_km,
+                    "mean_eccentricity": self.upper_orbit_result.mean_eccentricity,
                     "upper_propellant_remaining_kg": (
                         self.upper_orbit_result.upper_propellant_remaining_kg
                     ),
                     "replay_samples_count": len(self.upper_orbit_result.replay_samples),
                 }
                 if self.upper_orbit_result is not None
+                else None
+            ),
+            "physics_v2_metrics": (
+                {
+                    "peak_srp_drag_reduction": self.peak_srp_drag_reduction,
+                    "peak_ground_effect_n": self.peak_ground_effect_n,
+                    "peak_dual_slosh_force_n": self.peak_dual_slosh_force_n,
+                }
+                if self.physics_v2.any_enabled()
                 else None
             ),
             "phases": self.phase_stats,
@@ -1040,6 +1252,7 @@ def run_flight_3d(
         wind_config=scen.wind,
         sensor_config=scen.sensors,
         guidance_settings=guidance_settings,
+        gnc_v2=scfg.gnc_v2,
     )
 
     dt_ctrl = scfg.control_dt_s

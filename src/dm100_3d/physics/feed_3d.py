@@ -12,6 +12,7 @@ from math import isfinite, pi, radians, sin, sqrt
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from dm100_3d.config import DualTankGeometry
 from dm100_3d.coords import quat_to_rotmat
 
 
@@ -35,6 +36,15 @@ class FeedSettings:
     regulator_time_s: float = 0.1
     regulator_maximum_flow_kg_s: float = 0.6
     regulator_head_pa: float = 50_000.0
+
+    @classmethod
+    def dual_tank_v2(cls, geom: DualTankGeometry | None = None) -> FeedSettings:
+        """Combined dual-tank (CH4 39 m^3 + LOX 52 m^3 = 91 m^3, +9% ullage) feed settings."""
+        dtg = geom or DualTankGeometry()
+        return cls(
+            main_tank_volume_m3=dtg.total_tank_volume_m3,
+            liquid_density_kg_m3=dtg.bulk_propellant_density_kg_m3,
+        )
 
 
 @dataclass(frozen=True, slots=True)
