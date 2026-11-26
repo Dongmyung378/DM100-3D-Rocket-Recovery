@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from math import degrees, exp, hypot, isfinite, radians
+from math import acos, degrees, exp, hypot, isfinite, radians, sin
 
 import numpy as np
 
@@ -47,12 +47,18 @@ from dm100_3d.mjcf.builder import LEG_UNIT_DIRS
 from dm100_3d.physics import (
     Atmosphere3DSettings,
     AtmosphereLUT,
+    DrydenTurbulence3D,
+    DrydenTurbulenceSettings,
     DualTankSloshSettings,
     DualTankSloshState,
     FeedSettings,
     FeedState,
+    FlexBodySettings,
+    FlexBodyState,
     GroundEffect3DSettings,
     IgnitionSettings,
+    SensorSuiteV2,
+    SensorV2Settings,
     Separation3DSettings,
     Slosh3DSettings,
     Slosh3DState,
@@ -63,6 +69,7 @@ from dm100_3d.physics import (
     Wind3DLUT,
     compute_coriolis_and_centrifugal_3d,
     compute_engine_thrust_3d,
+    compute_flex_modal_properties,
     compute_forces_and_torques_3d,
     compute_ground_effect_3d,
     compute_srp_effects,
@@ -72,9 +79,11 @@ from dm100_3d.physics import (
     feed_rates,
     ignition_ready,
     initial_feed_state,
+    project_flex_state_at_separation,
     separation_event_3d,
     slosh_3d_response,
     slosh_body_offset_3d,
+    step_flex_body_3d,
     wgs84_coriolis_and_transport_enu,
     wgs84_normal_gravity,
 )
@@ -165,6 +174,51 @@ class MuJoCoPlant3D:
             c_ge=pv2.ground_effect_coeff,
             c_lat=pv2.ground_effect_lat_coeff,
         )
+        self.flex_settings = FlexBodySettings(
+            freq_mode1_scale=pv2.flex_freq_mode1_scale,
+            freq_mode2_scale=pv2.flex_freq_mode2_scale,
+            damping_scale=pv2.flex_damping_scale,
+        )
+        self.flex_state: FlexBodyState = FlexBodyState()
+        self._cached_flex_props = None
+        self.max_flex_tip_deflection_m: float = 0.0
+        self.max_bending_moment_nm: float = 0.0
+        self.dryden_settings = DrydenTurbulenceSettings(
+            sigma_m_s=pv2.dryden_sigma_m_s,
+            jet_shear_peak_m_s=pv2.jet_shear_peak_m_s,
+            jet_shear_azimuth_deg=pv2.jet_shear_azimuth_deg,
+            jet_shear_alt_m=pv2.jet_shear_alt_m,
+            jet_shear_thickness_m=pv2.jet_shear_thickness_m,
+        )
+        self.dryden_turbulence = (
+            DrydenTurbulence3D(seed=self.config.seed, settings=self.dryden_settings)
+            if pv2.dryden_turbulence
+            else None
+        )
+        self.sensors_v2 = (
+            SensorSuiteV2(
+                sensor_seed=self.config.sensor_seed,
+                base_config=self.scenario.sensors,
+                settings=SensorV2Settings(
+                    gyro_arw_scale=pv2.gyro_arw_scale,
+                    accel_vrw_scale=pv2.accel_vrw_scale,
+                    gyro_scale_err_ppm=pv2.gyro_scale_err_ppm,
+                    accel_scale_err_ppm=pv2.accel_scale_err_ppm,
+                    gyro_nonortho_deg=pv2.gyro_nonortho_deg,
+                    accel_nonortho_deg=pv2.accel_nonortho_deg,
+                    gps_blackout_duration_s=pv2.gps_blackout_duration_s,
+                    gps_blackout_heat_flux_w_m2=pv2.gps_blackout_heat_flux_w_m2,
+                    gps_blackout_alt_min_m=pv2.gps_blackout_alt_min_m,
+                    gps_blackout_alt_max_m=pv2.gps_blackout_alt_max_m,
+                    radar_alt_noise_scale=pv2.radar_alt_noise_scale,
+                    fin_resolver_noise_deg=pv2.fin_resolver_noise_deg,
+                    prop_gauge_noise_kg=pv2.prop_gauge_noise_kg,
+                    pad_radius_m=pv2.pad_radius_m,
+                ),
+            )
+            if pv2.sensors_v2
+            else None
+        )
         self.separation_settings = Separation3DSettings()
 
         dist = self.scenario.disturbances
@@ -209,6 +263,11 @@ class MuJoCoPlant3D:
             timestep_s=self.config.integration_dt_s,
             gear_deployed=False,
             upper_attached=True,
+            sloped_pad_enabled=pv2.sloped_pad,
+            pad_slope_deg=pv2.pad_slope_deg,
+            pad_slope_azimuth_deg=pv2.pad_slope_azimuth_deg,
+            pad_radius_m=pv2.pad_radius_m,
+            leg_stiffness_scale_4=pv2.leg_stiffness_scale_4,
         )
         mp0 = self.body.update_mass_properties(
             self._total_mass(),
@@ -227,6 +286,8 @@ class MuJoCoPlant3D:
             mp0.cg_station_m,
         )
         self.body.set_pose_from_com(p0, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+        if pv2.sloped_pad:
+            self.body.update_ground_surface(upper_attached=True, pos_xy_m=(0.0, 0.0))
 
         # Sensor RNG & delay queues
         self.sensor_rng = np.random.default_rng(self.config.sensor_seed)
@@ -237,8 +298,25 @@ class MuJoCoPlant3D:
             maxlen=sc.action_delay_steps + 1,
         )
         self._last_packet: TelemetryPacket3D | None = None
-        self._last_accel_body: np.ndarray = np.array([0.0, 0.0, G0], dtype=np.float64)
+        g0_pad = (
+            wgs84_normal_gravity(self.scenario.atmosphere.latitude_deg, 0.0)
+            if pv2.earth_wgs84_j2
+            else G0
+        )
+        self._last_accel_body: np.ndarray = np.array([0.0, 0.0, g0_pad], dtype=np.float64)
         self._last_contact = ContactSample3D()
+        self._last_ft_q_pa: float = 0.0
+        self._last_ft_heat_w_m2: float = 0.0
+        self._last_ft_thrust_n: float = 0.0
+        self._last_gps_pos: tuple[float, float, float] = (float(p0[0]), float(p0[1]), float(p0[2]))
+        self._last_gps_vel: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self.gps_blackout_total_s: float = 0.0
+        if self.sensors_v2 is not None:
+            self.sensors_v2.step_imu_500hz(
+                omega_true_body_rad_s=(0.0, 0.0, 0.0),
+                accel_true_body_m_s2=self._last_accel_body,
+                thrust_ratio=0.0,
+            )
 
         # Extrema & mission audit records
         self.max_q_pa: float = 0.0
@@ -292,6 +370,9 @@ class MuJoCoPlant3D:
         """Build strictly causal noisy/delayed TelemetryPacket3D (zero hidden truth)."""
         sc = self.scenario.sensors
         p_com, v_com, q, om_b = self.body.get_com_state()
+
+        if self.sensors_v2 is not None:
+            return self._telemetry_v2()
 
         dropped = (
             self._last_packet is not None
@@ -398,6 +479,167 @@ class MuJoCoPlant3D:
             packet_dropped=delayed.packet_dropped,
         )
 
+    def _telemetry_v2(self) -> TelemetryPacket3D:
+        """Build strictly causal DM100 3D v2 multi-sensor packet (zero oracle leaks)."""
+        assert self.sensors_v2 is not None
+        sc = self.scenario.sensors
+        p_com, v_com, q, _ = self.body.get_com_state()
+        r_wb = quat_to_rotmat(q)
+        mp = self.body.current_mass_props
+
+        # Per-engine nominal chamber pressure ratio (uniform per active engine in M2)
+        eng_thr = (
+            min(1.0, self.engine_throttle * (7.0 / max(self.active_engines, 1)))
+            if self.active_engines > 0
+            else 0.0
+        )
+        if self.active_engines == 7:
+            ratios_7 = (eng_thr,) * 7
+        elif self.active_engines == 3:
+            ratios_7 = (eng_thr, eng_thr, 0.0, 0.0, eng_thr, 0.0, 0.0)
+        elif self.active_engines == 1:
+            ratios_7 = (eng_thr, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        else:
+            ratios_7 = (0.0,) * 7
+
+        s_out = self.sensors_v2.sample_50hz(
+            time_s=self.time_s,
+            pos_com_enu_m=p_com,
+            vel_com_enu_m_s=v_com,
+            quat_wxyz=q,
+            rot_wb=r_wb,
+            cg_station_m=mp.cg_station_m,
+            dynamic_pressure_pa=self._last_ft_q_pa,
+            heat_flux_w_m2=self._last_ft_heat_w_m2,
+            thrust_n=self._last_ft_thrust_n,
+            upper_attached=self.upper_attached,
+            on_pad=self.on_pad,
+            pad_normal_enu=self.body.pad_normal_enu,
+            sloped_pad_enabled=self.physics_v2.sloped_pad,
+            true_fin_deflection_rad=(
+                self.fin_deflection[0],
+                self.fin_deflection[1],
+                self.fin_deflection[2],
+                self.fin_deflection[3],
+            ),
+            true_main_prop_kg=self.main_prop_kg,
+            true_chamber_ratios_7=ratios_7,
+            dt_ctrl_s=self.config.control_dt_s,
+        )
+        if self.sensors_v2.gps_blackout_active:
+            self.gps_blackout_total_s += self.config.control_dt_s
+
+        gps_pos = s_out["gps_pos_enu_m"]
+        gps_vel = s_out["gps_vel_enu_m_s"]
+        if gps_pos is not None and gps_vel is not None:
+            self._last_gps_pos = gps_pos  # type: ignore[assignment]
+            self._last_gps_vel = gps_vel  # type: ignore[assignment]
+
+        dropped = (
+            self._last_packet is not None
+            and sc.dropout_rate > 0.0
+            and float(self.sensor_rng.random()) < sc.dropout_rate
+        )
+        if dropped and self._last_packet is not None:
+            pkt = TelemetryPacket3D(
+                time_s=self.time_s,
+                measurement_time_s=self._last_packet.measurement_time_s,
+                pos_enu_m=self._last_packet.pos_enu_m,
+                vel_enu_m_s=self._last_packet.vel_enu_m_s,
+                quat_wxyz=self._last_packet.quat_wxyz,
+                omega_body_rad_s=s_out["omega_body_rad_s"],  # type: ignore[arg-type]
+                accel_body_m_s2=s_out["accel_body_m_s2"],  # type: ignore[arg-type]
+                main_propellant_kg=float(s_out["main_propellant_kg"]),
+                rcs_propellant_kg=self.rcs_prop_kg,
+                gear_extension=self.gear_extension,
+                fin_deflection_rad=s_out["fin_deflection_rad"],  # type: ignore[arg-type]
+                fin_extension=self.fin_extension,
+                gimbal_rad=(self.gimbal[0], self.gimbal[1]),
+                engine_throttle=self.engine_throttle,
+                upper_attached=self.upper_attached,
+                on_pad=self.on_pad,
+                touchdown_detected=self.touchdown_time_s is not None,
+                active_engines=self.active_engines,
+                restarts_used=self.restarts_used,
+                packet_dropped=True,
+                gps_valid=False,
+                gps_pos_enu_m=None,
+                gps_vel_enu_m_s=None,
+                attitude_valid=False,
+                star_tracker_valid=False,
+                star_tracker_quat_wxyz=None,
+                radar_alt_valid=False,
+                radar_range_m=0.0,
+                engine_chamber_pressure_ratio_7=s_out["engine_chamber_pressure_ratio_7"],  # type: ignore[arg-type]
+            )
+        else:
+            pkt = TelemetryPacket3D(
+                time_s=self.time_s,
+                measurement_time_s=self.time_s,
+                pos_enu_m=self._last_gps_pos,
+                vel_enu_m_s=self._last_gps_vel,
+                quat_wxyz=s_out["quat_wxyz"],  # type: ignore[arg-type]
+                omega_body_rad_s=s_out["omega_body_rad_s"],  # type: ignore[arg-type]
+                accel_body_m_s2=s_out["accel_body_m_s2"],  # type: ignore[arg-type]
+                main_propellant_kg=float(s_out["main_propellant_kg"]),
+                rcs_propellant_kg=self.rcs_prop_kg,
+                gear_extension=self.gear_extension,
+                fin_deflection_rad=s_out["fin_deflection_rad"],  # type: ignore[arg-type]
+                fin_extension=self.fin_extension,
+                gimbal_rad=(self.gimbal[0], self.gimbal[1]),
+                engine_throttle=self.engine_throttle,
+                upper_attached=self.upper_attached,
+                on_pad=self.on_pad,
+                touchdown_detected=self.touchdown_time_s is not None,
+                active_engines=self.active_engines,
+                restarts_used=self.restarts_used,
+                packet_dropped=False,
+                gps_valid=bool(s_out["gps_valid"]),
+                gps_pos_enu_m=gps_pos,  # type: ignore[arg-type]
+                gps_vel_enu_m_s=gps_vel,  # type: ignore[arg-type]
+                attitude_valid=bool(s_out["attitude_valid"]),
+                star_tracker_valid=bool(s_out["star_tracker_valid"]),
+                star_tracker_quat_wxyz=s_out["star_tracker_quat_wxyz"],  # type: ignore[arg-type]
+                radar_alt_valid=bool(s_out["radar_alt_valid"]),
+                radar_range_m=float(s_out["radar_range_m"]),
+                engine_chamber_pressure_ratio_7=s_out["engine_chamber_pressure_ratio_7"],  # type: ignore[arg-type]
+            )
+            self._last_packet = pkt
+
+        self.obs_queue.append(pkt)
+        delayed = self.obs_queue[0]
+        return TelemetryPacket3D(
+            time_s=self.time_s,
+            measurement_time_s=delayed.measurement_time_s,
+            pos_enu_m=delayed.pos_enu_m,
+            vel_enu_m_s=delayed.vel_enu_m_s,
+            quat_wxyz=delayed.quat_wxyz,
+            omega_body_rad_s=delayed.omega_body_rad_s,
+            accel_body_m_s2=delayed.accel_body_m_s2,
+            main_propellant_kg=delayed.main_propellant_kg,
+            rcs_propellant_kg=delayed.rcs_propellant_kg,
+            gear_extension=delayed.gear_extension,
+            fin_deflection_rad=delayed.fin_deflection_rad,
+            fin_extension=delayed.fin_extension,
+            gimbal_rad=delayed.gimbal_rad,
+            engine_throttle=delayed.engine_throttle,
+            upper_attached=self.upper_attached,
+            on_pad=self.on_pad,
+            touchdown_detected=self.touchdown_time_s is not None,
+            active_engines=self.active_engines,
+            restarts_used=self.restarts_used,
+            packet_dropped=delayed.packet_dropped,
+            gps_valid=delayed.gps_valid,
+            gps_pos_enu_m=delayed.gps_pos_enu_m,
+            gps_vel_enu_m_s=delayed.gps_vel_enu_m_s,
+            attitude_valid=delayed.attitude_valid,
+            star_tracker_valid=delayed.star_tracker_valid,
+            star_tracker_quat_wxyz=delayed.star_tracker_quat_wxyz,
+            radar_alt_valid=delayed.radar_alt_valid,
+            radar_range_m=delayed.radar_range_m,
+            engine_chamber_pressure_ratio_7=delayed.engine_chamber_pressure_ratio_7,
+        )
+
     def _upper_stage_pose_at(
         self, time_s: float
     ) -> tuple[tuple[float, float, float] | None, tuple[float, float, float, float] | None]:
@@ -475,6 +717,15 @@ class MuJoCoPlant3D:
 
         self.upper_attached = False
         self.separation_time_s = self.time_s
+        if pv2.flex_body:
+            # Exact L2 inner-product projection from 33 m stack onto 24 m booster modes
+            self.flex_state = project_flex_state_at_separation(self.flex_state)
+            self._cached_flex_props = None
+        if pv2.sloped_pad:
+            self.body.update_ground_surface(
+                upper_attached=False,
+                pos_xy_m=(float(imp["booster_pos_enu_m"][0]), float(imp["booster_pos_enu_m"][1])),
+            )
         self.body.update_mass_properties(
             b_m,
             self.gear_extension,
@@ -544,6 +795,23 @@ class MuJoCoPlant3D:
             hypot(float(fp[0]), float(fp[1])) <= gear.pad_radius_m for fp in foot_positions
         )
 
+        # Pad-frame normal/tangential velocities & relative tilt (PDR P-M4)
+        _, n_surf = self.body.surface_height_and_normal(
+            float(p_com[0]), float(p_com[1]), upper_attached=self.upper_attached
+        )
+        v_pad_norm_max = 0.0
+        v_pad_tan_max = 0.0
+        for ux, uy in LEG_UNIT_DIRS:
+            r_f_b = np.array(
+                [ux * gear.half_span_m, uy * gear.half_span_m, gear.foot_station_m - cg]
+            )
+            v_f = v_com + r_wb @ np.cross(om_b, r_f_b)
+            vn = -float(v_f @ n_surf)
+            vt = float(np.linalg.norm(v_f - float(v_f @ n_surf) * n_surf))
+            v_pad_norm_max = max(v_pad_norm_max, max(0.0, vn))
+            v_pad_tan_max = max(v_pad_tan_max, vt)
+        tilt_pad_deg = degrees(acos(max(-1.0, min(1.0, float(r_wb[:, 2] @ n_surf)))))
+
         lim = self.vehicle.safety
         criteria = {
             "position": pos_err <= lim.max_position_error_m,
@@ -562,7 +830,10 @@ class MuJoCoPlant3D:
             "position_error_m": pos_err,
             "vertical_foot_speed_m_s": foot_v_vert_max,
             "horizontal_foot_speed_m_s": foot_v_horiz_max,
+            "pad_normal_speed_m_s": v_pad_norm_max,
+            "pad_tangent_speed_m_s": v_pad_tan_max,
             "tilt_deg": tilt_deg,
+            "tilt_pad_deg": tilt_pad_deg,
             "contact_rate_deg_s": rate_deg_s,
             "criteria": criteria,
         }
@@ -644,6 +915,17 @@ class MuJoCoPlant3D:
             )
             self._last_mass_update_s = self.time_s
             self._last_struts_on = struts_on
+            if pv2.flex_body:
+                self._cached_flex_props = compute_flex_modal_properties(
+                    total_mass_kg=self._total_mass(),
+                    main_propellant_kg=self.main_prop_kg,
+                    rcs_propellant_kg=self.rcs_prop_kg,
+                    gear_extension=self.gear_extension,
+                    upper_attached=self.upper_attached,
+                    vehicle=self.vehicle,
+                    settings=self.flex_settings,
+                    dual_tank_geom=pv2.dual_tank_geometry,
+                )
         else:
             mp = self.body.current_mass_props
 
@@ -699,10 +981,15 @@ class MuJoCoPlant3D:
                 )
             )
 
-            # 2. Evaluate 3D external forces, feed limiting, slosh, and optional roll disturbance
+            # 2. Evaluate 3D external forces, feed limiting, slosh, flex, Dryden, and sensors_v2
             p_com, v_com, q_wxyz, om_b = self.body.get_com_state()
             r_wb = quat_to_rotmat(q_wxyz)
             tot_m = self._total_mass()
+            if pv2.sloped_pad:
+                self.body.update_ground_surface(
+                    upper_attached=self.upper_attached,
+                    pos_xy_m=(float(p_com[0]), float(p_com[1])),
+                )
             _, p_pa, _ = self.atmo_lut.at(float(p_com[2]))
             _, dem_flow = compute_engine_thrust_3d(
                 self.engine_throttle, p_pa, self.vehicle, thrust_scale=dist.thrust_scale
@@ -729,12 +1016,27 @@ class MuJoCoPlant3D:
                     tot_m, self.main_prop_kg, self.slosh_state, self.slosh_settings
                 )
 
+            extra_wind = (0.0, 0.0, 0.0)
+            if self.dryden_turbulence is not None:
+                wx0, wy0, wz0 = self.wind_lut.at(float(p_com[2]), self.time_s)
+                v_air0 = float(
+                    np.linalg.norm(
+                        [float(v_com[0]) - wx0, float(v_com[1]) - wy0, float(v_com[2]) - wz0]
+                    )
+                )
+                extra_wind = self.dryden_turbulence.step(
+                    altitude_m=float(p_com[2]), airspeed_m_s=v_air0, dt_s=dt
+                )
+
             srp_drag_mult = 1.0
             srp_cp_shift = 0.0
             srp_buffet_tau = (0.0, 0.0, 0.0)
             if pv2.srp_interference and (not self.upper_attached) and self.engine_throttle > 1e-6:
                 t_k_s, p_pa_s, rho_s = self.atmo_lut.at(float(p_com[2]))
                 wx_s, wy_s, wz_s = self.wind_lut.at(float(p_com[2]), self.time_s)
+                wx_s += extra_wind[0]
+                wy_s += extra_wind[1]
+                wz_s += extra_wind[2]
                 v_rel_s = np.array(
                     [float(v_com[0]) - wx_s, float(v_com[1]) - wy_s, float(v_com[2]) - wz_s],
                     dtype=np.float64,
@@ -792,8 +1094,12 @@ class MuJoCoPlant3D:
                 body_offset_body_m=b_off,
                 axial_drag_multiplier=srp_drag_mult,
                 cp_shift_m=srp_cp_shift,
+                extra_wind_enu_m_s=extra_wind,
             )
             last_ft = ft
+            self._last_ft_q_pa = ft.dynamic_pressure_pa
+            self._last_ft_heat_w_m2 = ft.heat_flux_w_m2
+            self._last_ft_thrust_n = ft.thrust_n
 
             # Optional external 3D roll disturbance pulse + SRP buffeting + ground effect
             tau_b = np.asarray(ft.torque_body_nm, dtype=np.float64)
@@ -825,12 +1131,72 @@ class MuJoCoPlant3D:
                     nozzle_station_m=self.vehicle.geometry.nozzle_station_m,
                     thrust_n=ft.thrust_n,
                     upper_attached=self.upper_attached,
+                    pad_normal_enu=self.body.pad_normal_enu,
                     settings=self.ground_effect_settings,
                 )
                 if ge.cushion_force_n > 0.0:
                     f_w_ext = f_w_ext + np.asarray(ge.force_world_n, dtype=np.float64)
                     tau_b = tau_b + np.asarray(ge.torque_body_nm, dtype=np.float64)
                     self.peak_ground_effect_n = max(self.peak_ground_effect_n, ge.cushion_force_n)
+
+            # Multi-rate 500 Hz NASA SP-8003 2-plane x 2-mode flexible-body dynamics (M2)
+            flex_samples = None
+            if pv2.flex_body and (not (self.on_pad and self.upper_attached)):
+                if self._cached_flex_props is None:
+                    self._cached_flex_props = compute_flex_modal_properties(
+                        total_mass_kg=tot_m,
+                        main_propellant_kg=self.main_prop_kg,
+                        rcs_propellant_kg=self.rcs_prop_kg,
+                        gear_extension=self.gear_extension,
+                        upper_attached=self.upper_attached,
+                        vehicle=self.vehicle,
+                        settings=self.flex_settings,
+                        dual_tank_geom=pv2.dual_tank_geometry,
+                    )
+                fprops = self._cached_flex_props
+                gy_f, gx_f = self.gimbal[0], self.gimbal[1]
+                g_mag_f = hypot(gy_f, gx_f)
+                s_gf = sin(g_mag_f) / g_mag_f if g_mag_f > 1e-12 else 1.0
+                tvc_lat_xy = (ft.thrust_n * gy_f * s_gf, ft.thrust_n * gx_f * s_gf)
+                fin_f_b = r_wb.T @ np.asarray(ft.fin_force_world_n, dtype=np.float64)
+                body_aero_w = np.asarray(ft.aero_force_world_n, dtype=np.float64) - np.asarray(
+                    ft.fin_force_world_n, dtype=np.float64
+                )
+                body_aero_b = r_wb.T @ body_aero_w
+                cp_nom = (
+                    self.vehicle.aerodynamics.pressure_center_ascent_m
+                    if self.upper_attached
+                    else self.vehicle.aerodynamics.pressure_center_descent_m + srp_cp_shift
+                )
+                flex_samples = step_flex_body_3d(
+                    state=self.flex_state,
+                    dt_s=dt,
+                    modal_props=fprops,
+                    cg_station_m=mp.cg_station_m,
+                    thrust_axial_n=ft.thrust_n,
+                    tvc_lateral_force_body_xy_n=tvc_lat_xy,
+                    fin_force_body_xy_n=(float(fin_f_b[0]), float(fin_f_b[1])),
+                    aero_force_body_xy_n=(float(body_aero_b[0]), float(body_aero_b[1])),
+                    rcs_torque_body_xy_nm=(float(rcs_cmd[0]), float(rcs_cmd[1])),
+                    cp_station_m=cp_nom,
+                    vehicle=self.vehicle,
+                    buffet_torque_body_xy_nm=(float(srp_buffet_tau[0]), float(srp_buffet_tau[1])),
+                    settings=self.flex_settings,
+                )
+                self.flex_state = flex_samples[-1].state
+                n_fs = float(len(flex_samples))
+                mean_dtau = np.mean([fs.rigid_torque_delta_body_nm for fs in flex_samples], axis=0)
+                mean_df_b = np.mean([fs.rigid_force_delta_body_n for fs in flex_samples], axis=0)
+                tau_b = tau_b + mean_dtau
+                f_w_ext = f_w_ext + r_wb @ mean_df_b
+                for fs in flex_samples:
+                    self.max_flex_tip_deflection_m = max(
+                        self.max_flex_tip_deflection_m, fs.tip_deflection_norm_m
+                    )
+                    self.max_bending_moment_nm = max(
+                        self.max_bending_moment_nm, fs.max_bending_moment_nm
+                    )
+                _ = n_fs
 
             # Slosh response (v2 dual-tank 3x3 coupled vs legacy v1 single-tank)
             # In v2, include the MuJoCo ground normal/friction reaction force in proper
@@ -963,8 +1329,37 @@ class MuJoCoPlant3D:
                 if f_w_ext[2] > tot_m * g_pad:
                     self.on_pad = False
                 else:
+                    if self.sensors_v2 is not None:
+                        n_imu = max(1, int(round(dt / 0.002)))
+                        pad_acc = np.array([0.0, 0.0, g_pad], dtype=np.float64)
+                        for _ in range(n_imu):
+                            self.sensors_v2.step_imu_500hz(
+                                omega_true_body_rad_s=(0.0, 0.0, 0.0),
+                                accel_true_body_m_s2=pad_acc,
+                                thrust_ratio=self.engine_throttle,
+                            )
                     self.time_s += dt
                     continue
+
+            # Clock 500 Hz anti-aliased IMU filter (in lockstep with flex_samples when active)
+            if self.sensors_v2 is not None:
+                if flex_samples is not None:
+                    for fs in flex_samples:
+                        self.sensors_v2.step_imu_500hz(
+                            omega_true_body_rad_s=om_b,
+                            accel_true_body_m_s2=a_proper_b,
+                            flex_omega_delta_rad_s=fs.imu_omega_delta_rad_s,
+                            flex_accel_delta_m_s2=fs.imu_accel_delta_m_s2,
+                            thrust_ratio=self.engine_throttle,
+                        )
+                else:
+                    n_imu = max(1, int(round(dt / 0.002)))
+                    for _ in range(n_imu):
+                        self.sensors_v2.step_imu_500hz(
+                            omega_true_body_rad_s=om_b,
+                            accel_true_body_m_s2=a_proper_b,
+                            thrust_ratio=self.engine_throttle,
+                        )
 
             f_tot_w = f_w_ext + tot_m * a_cor
             tau_w = r_wb @ tau_b
@@ -983,11 +1378,18 @@ class MuJoCoPlant3D:
                 self.outcome = "numerical_divergence"
                 return
 
+            z_surf_after = (
+                self.body.surface_height_and_normal(
+                    float(p_after[0]), float(p_after[1]), upper_attached=self.upper_attached
+                )[0]
+                if pv2.sloped_pad
+                else 0.0
+            )
             in_ground_contact = self.touchdown_time_s is not None or (
                 in_contact_zone
                 and (
                     self.body.sample_contact().any_contact
-                    or float(p_after[2]) - mp.cg_station_m
+                    or float(p_after[2]) - mp.cg_station_m - z_surf_after
                     <= -self.vehicle.landing_gear.foot_station_m + 0.05
                 )
             )
@@ -1003,6 +1405,11 @@ class MuJoCoPlant3D:
                 self.max_ascent_axial_g = max(
                     self.max_ascent_axial_g, float(np.linalg.norm(a_proper_b)) / G0
                 )
+                if pv2.any_enabled():
+                    # Criterion #21 (CDR §2.1): track roll across full flight incl. ascent in v2
+                    self.max_roll_deg = max(
+                        self.max_roll_deg, abs(degrees(roll_angle_rad(q_after)))
+                    )
             elif not in_ground_contact:
                 self.max_recovery_g = max(
                     self.max_recovery_g, float(np.linalg.norm(a_proper_b)) / G0
@@ -1166,6 +1573,20 @@ class MuJoCoPlant3D:
             "contact_load_g": self.max_contact_load_g <= gear.max_contact_load_g + eps,
             "engine_off_standing": bool(self.standing_stable),
         }
+        min_bend_sf = (
+            self.flex_settings.allowable_bending_moment_nm / max(self.max_bending_moment_nm, 1.0)
+            if self.physics_v2.flex_body
+            else float("inf")
+        )
+        if self.physics_v2.flex_body:
+            # Criterion #20 (CDR §2.1): Structural integrity (tip deflection & bending SF)
+            criteria["structural_integrity"] = (
+                self.max_flex_tip_deflection_m <= self.flex_settings.max_tip_deflection_m + eps
+                and min_bend_sf >= self.flex_settings.min_bending_safety_factor - eps
+            )
+        if self.physics_v2.any_enabled():
+            # Criterion #21 (CDR §2.1): All-flight roll stability <= 5.0 deg
+            criteria["roll_stability"] = self.max_roll_deg <= 5.0 + eps
         failed = [k for k, v in criteria.items() if not v]
         passed = (self.outcome == "landed") and (len(failed) == 0)
         fc = self.first_contact_record or {}
@@ -1224,6 +1645,11 @@ class MuJoCoPlant3D:
                     "peak_srp_drag_reduction": self.peak_srp_drag_reduction,
                     "peak_ground_effect_n": self.peak_ground_effect_n,
                     "peak_dual_slosh_force_n": self.peak_dual_slosh_force_n,
+                    "max_flex_tip_deflection_m": self.max_flex_tip_deflection_m,
+                    "max_bending_moment_nm": self.max_bending_moment_nm,
+                    "min_bending_safety_factor": (min_bend_sf if isfinite(min_bend_sf) else None),
+                    "pad_slope_deg": self.body.pad_slope_deg,
+                    "gps_blackout_total_s": self.gps_blackout_total_s,
                 }
                 if self.physics_v2.any_enabled()
                 else None

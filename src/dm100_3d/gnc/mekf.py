@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from math import exp, radians, sqrt
+from math import acos, degrees, exp, hypot, radians, sqrt, tan
 
 import numpy as np
 from numpy.typing import NDArray
@@ -30,6 +30,7 @@ from dm100_3d.coords import (
     quat_multiply_wxyz,
     quat_to_rotmat,
 )
+from dm100_3d.gnc.notch_filter import StructuralFilter3D
 from dm100_3d.interfaces import ActuatorCommand3D, TelemetryPacket3D
 from dm100_3d.physics import (
     AtmosphereLUT,
@@ -95,6 +96,8 @@ class EstimatedState3D:
     touchdown_detected: bool
     active_engines: int
     restarts_used: int
+    gps_blackout: bool = False
+    radar_foot_height_m: float | None = None
 
 
 class CausalEstimator3D:
@@ -151,6 +154,38 @@ class CausalEstimator3D:
         self._last_omega_filt: NDArray[np.float64] = np.zeros(3, dtype=np.float64)
         self._prev_ang_sample: tuple | None = None
         self._sep_time_s: float | None = None
+
+        # DM100 3D v2 (M2) Strapdown INS + Single-Path Elliptic CSI Filter + Matched DOB state
+        self._a_dist_world: NDArray[np.float64] = np.zeros(3, dtype=np.float64)
+        self._csi_omega_filter: StructuralFilter3D | None = (
+            StructuralFilter3D(upper_attached=True) if self.gnc_v2.use_structural_filter else None
+        )
+        self._csi_dob_torque_filter: StructuralFilter3D | None = (
+            self._csi_omega_filter.clone() if self._csi_omega_filter is not None else None
+        )
+        self._gps_outage_s: float = 0.0
+        self._in_gps_blackout: bool = False
+        self._gps_reacq_buf: deque[tuple[NDArray[np.float64], NDArray[np.float64]]] = deque(
+            maxlen=3
+        )
+        self._gps_reacq_start_s: float | None = None
+        self._radar_foot_height_m: float | None = None
+        self._H_gps = np.zeros((6, 15), dtype=np.float64)
+        self._H_gps[0:3, 0:3] = np.eye(3)
+        self._H_gps[3:6, 3:6] = np.eye(3)
+        self._R_gps = np.diag([sig_p**2] * 3 + [sig_v**2] * 3)
+        self._H_att = np.zeros((3, 15), dtype=np.float64)
+        self._H_att[0:3, 6:9] = np.eye(3)
+        self._R_att_pad = np.diag([sig_att**2] * 3)
+        self._R_att_st = np.diag([radians(0.025) ** 2] * 3)
+        if self.gnc_v2.use_strapdown_mekf:
+            self.P = np.diag(
+                [0.25] * 3
+                + [0.05] * 3
+                + [radians(0.10) ** 2] * 3
+                + [0.08**2] * 3
+                + [radians(0.03) ** 2] * 3
+            )
 
     def record_command(self, time_s: float, cmd: ActuatorCommand3D) -> None:
         exec_end = time_s + (self.sensor_config.action_delay_steps + 1) * self.control_dt_s
@@ -314,8 +349,317 @@ class CausalEstimator3D:
             (fins[0], fins[1], fins[2], fins[3]),
         )
 
+    def _joseph_update(
+        self,
+        h_mat: NDArray[np.float64],
+        r_mat: NDArray[np.float64],
+        y_innov: NDArray[np.float64],
+        *,
+        gain_scale: float = 1.0,
+        ba_clip: float = 0.45,
+    ) -> None:
+        """Apply Joseph-stabilized MEKF measurement update with optional gain ramp."""
+        s_mat = h_mat @ self.P @ h_mat.T + r_mat
+        k_gain = float(gain_scale) * (self.P @ h_mat.T @ np.linalg.inv(s_mat))
+        dx = k_gain @ y_innov
+
+        self.p += dx[0:3]
+        self.v += dx[3:6]
+        dth = dx[6:9]
+        dq_inj = axis_angle_to_quat_wxyz(dth, float(np.linalg.norm(dth)))
+        self.q = normalize_quat_wxyz(quat_multiply_wxyz(self.q, dq_inj), canonical=True)
+        self.b_a = np.clip(self.b_a + dx[9:12], -ba_clip, ba_clip)
+        self.b_g = np.clip(self.b_g + dx[12:15], -radians(0.5), radians(0.5))
+
+        i_kh = np.eye(15, dtype=np.float64) - k_gain @ h_mat
+        self.P = i_kh @ self.P @ i_kh.T + k_gain @ r_mat @ k_gain.T
+        self.P = 0.5 * (self.P + self.P.T)
+
+    def _strapdown_world_accel(
+        self, pkt: TelemetryPacket3D, q_wxyz: NDArray[np.float64], a_meas_b: NDArray[np.float64]
+    ) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+        """Return `(a_world_net, r_wb, a_b_corr)` from Strapdown IMU specific force."""
+        r_wb = quat_to_rotmat(q_wxyz)
+        a_b_corr = a_meas_b - self.b_a
+        if self.gnc_v2.use_wgs84_gravity:
+            g_loc = wgs84_normal_gravity(self.latitude_deg, float(self.p[2]))
+            a_cor = wgs84_coriolis_and_transport_enu(
+                altitude_m=float(self.p[2]),
+                vel_enu_m_s=self.v,
+                latitude_deg=self.latitude_deg,
+                coriolis_enabled=self.coriolis_enabled,
+                planar_coriolis_only=self.planar_coriolis_only,
+            )
+        else:
+            g_loc = fast_gravity(float(self.p[2]))
+            a_cor = compute_coriolis_and_centrifugal_3d(
+                altitude_m=float(self.p[2]),
+                vel_enu_m_s=self.v,
+                latitude_deg=self.latitude_deg,
+                coriolis_enabled=self.coriolis_enabled,
+                planar_coriolis_only=self.planar_coriolis_only,
+            )
+        if pkt.on_pad and pkt.upper_attached:
+            return np.zeros(3, dtype=np.float64), r_wb, a_b_corr
+        a_w = r_wb @ a_b_corr + a_cor
+        a_w[2] -= g_loc
+        return a_w, r_wb, a_b_corr
+
+    def _observe_strapdown_v2(self, pkt: TelemetryPacket3D) -> EstimatedState3D:
+        """15-State Strapdown INS MEKF v2 + Innovation 3-Fix GPS + Ray-Gated Slant Radar."""
+        om_meas = np.asarray(pkt.omega_body_rad_s, dtype=np.float64)
+        a_meas = np.asarray(pkt.accel_body_m_s2, dtype=np.float64)
+        gps_pos = pkt.gps_pos_enu_m if pkt.gps_pos_enu_m is not None else pkt.pos_enu_m
+        gps_vel = pkt.gps_vel_enu_m_s if pkt.gps_vel_enu_m_s is not None else pkt.vel_enu_m_s
+        p_meas = np.asarray(gps_pos, dtype=np.float64)
+        v_meas = np.asarray(gps_vel, dtype=np.float64)
+
+        if not self.initialized:
+            self.p = p_meas.copy()
+            self.v = v_meas.copy()
+            self.q = normalize_quat_wxyz(pkt.quat_wxyz, canonical=True)
+            self.last_meas_t = pkt.measurement_time_s
+            self._last_omega_filt = om_meas.copy()
+            if self._csi_omega_filter is not None:
+                self._csi_omega_filter.reset(
+                    (float(om_meas[0]), float(om_meas[1])), upper_attached=pkt.upper_attached
+                )
+            self.initialized = True
+        else:
+            dt = pkt.measurement_time_s - self.last_meas_t
+            if dt > 1e-9:
+                om_corr = om_meas - self.b_g
+                a_w, r_wb, a_b_corr = self._strapdown_world_accel(pkt, self.q, a_meas)
+                self.p = self.p + self.v * dt + 0.5 * a_w * (dt * dt)
+                self.v = self.v + a_w * dt
+                dq = axis_angle_to_quat_wxyz(om_corr, float(np.linalg.norm(om_corr)) * dt)
+                self.q = normalize_quat_wxyz(quat_multiply_wxyz(self.q, dq), canonical=True)
+
+                # Exact 15x15 Strapdown INS error-state transition Jacobian
+                f_mat = np.eye(15, dtype=np.float64)
+                f_mat[0:3, 3:6] = np.eye(3) * dt
+                if not (pkt.on_pad and pkt.upper_attached):
+                    f_mat[3:6, 6:9] = -r_wb @ _skew(a_b_corr) * dt
+                    f_mat[3:6, 9:12] = -r_wb * dt
+                f_mat[6:9, 6:9] = np.eye(3) - _skew(om_corr) * dt
+                f_mat[6:9, 12:15] = -np.eye(3) * dt
+
+                # Process noise (with velocity covariance inflation during GPS blackout)
+                a_mag = float(np.linalg.norm(a_b_corr))
+                if not pkt.gps_valid:
+                    q_v = (0.08**2 + (0.0012 * a_mag) ** 2) * dt
+                else:
+                    q_v = (0.04**2 + (0.0005 * a_mag) ** 2) * dt
+                q_g = max(radians(self.sensor_config.gyro_noise_deg_s), radians(0.015)) ** 2 * dt
+                q_proc = np.diag(
+                    [1e-5 * dt] * 3 + [q_v] * 3 + [q_g] * 3 + [2e-5 * dt] * 3 + [2e-9 * dt] * 3
+                )
+                self.P = f_mat @ self.P @ f_mat.T + q_proc
+                self.P = 0.5 * (self.P + self.P.T)
+                self.last_meas_t = pkt.measurement_time_s
+
+            # 1. GPS measurement update with Innovation 3-Fix Reacquisition Validator (CDR C3)
+            if not pkt.packet_dropped:
+                if (not pkt.gps_valid) or (pkt.gps_pos_enu_m is None and not pkt.gps_valid):
+                    self._in_gps_blackout = True
+                    self._gps_outage_s += max(dt, 0.0)
+                    self._gps_reacq_buf.clear()
+                else:
+                    dp_inn = p_meas - self.p
+                    dv_inn = v_meas - self.v
+                    allow_gps_update = True
+                    gain_scale = 1.0
+
+                    if self._in_gps_blackout and self._gps_outage_s > 2.0:
+                        # Require 3 mutually consistent MEKF innovations (works at 1,000-1,600 m/s!)
+                        self._gps_reacq_buf.append((dp_inn.copy(), dv_inn.copy()))
+                        if len(self._gps_reacq_buf) < 3:
+                            allow_gps_update = False
+                        else:
+                            max_dp_diff = 0.0
+                            max_dv_diff = 0.0
+                            buf_list = list(self._gps_reacq_buf)
+                            for i in range(3):
+                                for j in range(i + 1, 3):
+                                    max_dp_diff = max(
+                                        max_dp_diff,
+                                        float(np.linalg.norm(buf_list[i][0] - buf_list[j][0])),
+                                    )
+                                    max_dv_diff = max(
+                                        max_dv_diff,
+                                        float(np.linalg.norm(buf_list[i][1] - buf_list[j][1])),
+                                    )
+                            if max_dp_diff <= 5.0 and max_dv_diff <= 2.0:
+                                self._in_gps_blackout = False
+                                self._gps_outage_s = 0.0
+                                self._gps_reacq_buf.clear()
+                                self._gps_reacq_start_s = pkt.measurement_time_s
+                                gain_scale = 0.10
+                            else:
+                                allow_gps_update = False
+                    elif self._in_gps_blackout:
+                        self._in_gps_blackout = False
+                        self._gps_outage_s = 0.0
+
+                    if self._gps_reacq_start_s is not None:
+                        el_r = pkt.measurement_time_s - self._gps_reacq_start_s
+                        if el_r < 3.0:
+                            gain_scale = min(1.0, max(0.10, el_r / 3.0))
+                        else:
+                            self._gps_reacq_start_s = None
+
+                    if allow_gps_update:
+                        y_gps = np.concatenate([dp_inn, dv_inn])
+                        self._joseph_update(
+                            self._H_gps, self._R_gps, y_gps, gain_scale=gain_scale, ba_clip=0.45
+                        )
+
+                # 2. Strictly causal attitude update (launchpad or vacuum star tracker only)
+                if pkt.attitude_valid:
+                    q_pad = normalize_quat_wxyz(pkt.quat_wxyz, canonical=True)
+                    dq_err = quat_multiply_wxyz(quat_conjugate_wxyz(self.q), q_pad)
+                    if dq_err[0] < 0.0:
+                        dq_err = -dq_err
+                    self._joseph_update(
+                        self._H_att, self._R_att_pad, 2.0 * dq_err[1:4], ba_clip=0.45
+                    )
+                elif pkt.star_tracker_valid and pkt.star_tracker_quat_wxyz is not None:
+                    q_st = normalize_quat_wxyz(pkt.star_tracker_quat_wxyz, canonical=True)
+                    dq_err = quat_multiply_wxyz(quat_conjugate_wxyz(self.q), q_st)
+                    if dq_err[0] < 0.0:
+                        dq_err = -dq_err
+                    self._joseph_update(
+                        self._H_att, self._R_att_st, 2.0 * dq_err[1:4], ba_clip=0.45
+                    )
+
+                # 3. Base-mounted slant radar altimeter with ray-intersection gating (CDR C5/H2)
+                self._radar_foot_height_m = None
+                if pkt.radar_alt_valid and (not pkt.upper_attached) and (not pkt.on_pad):
+                    mass_r = self._nominal_mass(pkt)
+                    mp_r = self._mass_props(
+                        mass_r, pkt.gear_extension, False, pkt.rcs_propellant_kg
+                    )
+                    r_wb_r = quat_to_rotmat(self.q)
+                    cos_th = max(-1.0, min(1.0, float(r_wb_r[2, 2])))
+                    tilt_rad = acos(cos_th)
+                    # Convert hull-base radar slant range (z_radar_b=0) to foot height
+                    self._radar_foot_height_m = pkt.radar_range_m * max(cos_th, 0.5) - (
+                        0.0 - self.vehicle.landing_gear.foot_station_m
+                    )
+                    # Ray-ground intersection radius estimate (z = 0 nominal plane)
+                    p_base_est = self.p - r_wb_r @ np.array([0.0, 0.0, mp_r.cg_station_m])
+                    d_ray = -r_wb_r[:, 2]
+                    if float(d_ray[2]) < -0.5:
+                        t_hit = max(0.0, -float(p_base_est[2]) / float(d_ray[2]))
+                        r_hit_est = hypot(
+                            float(p_base_est[0] + t_hit * d_ray[0]),
+                            float(p_base_est[1] + t_hit * d_ray[1]),
+                        )
+                        if (
+                            (r_hit_est <= 12.0 or r_hit_est >= 25.0)
+                            and float(self.p[2]) < 300.0
+                            and degrees(tilt_rad) < 15.0
+                        ):
+                            inv_c = 1.0 / max(cos_th, 0.5)
+                            h_pred = (float(self.p[2]) - mp_r.cg_station_m * cos_th) * inv_c
+                            y_rad = float(pkt.radar_range_m) - h_pred
+                            sig_th = max(
+                                radians(0.15), sqrt(max(float(self.P[6, 6] + self.P[7, 7]), 1e-8))
+                            )
+                            slope_var = (
+                                (r_hit_est * tan(radians(2.5))) ** 2 if r_hit_est <= 15.0 else 0.0
+                            )
+                            r_rad = (
+                                0.10**2
+                                + (max(h_pred, 0.0) * tan(tilt_rad) * sig_th) ** 2
+                                + slope_var
+                            )
+                            h_rad = np.zeros((1, 15), dtype=np.float64)
+                            h_rad[0, 2] = inv_c
+                            s_rad = float((h_rad @ self.P @ h_rad.T)[0, 0] + r_rad)
+                            if abs(y_rad) <= 5.0 * sqrt(max(s_rad, 1e-9)):
+                                self._joseph_update(
+                                    h_rad,
+                                    np.array([[r_rad]], dtype=np.float64),
+                                    np.array([y_rad], dtype=np.float64),
+                                    ba_clip=0.45,
+                                )
+
+            # 4. Separate causal world aerodynamic/thrust disturbance observer for GNC guidance
+            if pkt.on_pad or pkt.touchdown_detected:
+                self._a_dist_world[:] = 0.0
+            elif dt > 1e-9:
+                a_w_imu, _, _ = self._strapdown_world_accel(pkt, self.q, a_meas)
+                a_w_nom = self._nominal_world_accel(pkt, self.q, om_meas - self.b_g)
+                raw_dist = np.clip(a_w_imu - a_w_nom, -4.5, 4.5)
+                a_lpf = 1.0 - exp(-dt / 0.28)
+                self._a_dist_world = np.clip(
+                    self._a_dist_world + a_lpf * (raw_dist - self._a_dist_world), -4.5, 4.5
+                )
+
+        # Single-path 4th-order Elliptic CSI filter on Pitch/Yaw (Roll bypassed, alpha_om = 1.0!)
+        om_now = om_meas - self.b_g
+        if self._csi_omega_filter is not None:
+            om_out = self._csi_omega_filter.filter_sample(om_now, upper_attached=pkt.upper_attached)
+        else:
+            alpha_om = 0.65 if self.sensor_config.gyro_noise_deg_s > 0.0 else 1.0
+            self._last_omega_filt += alpha_om * (om_now - self._last_omega_filt)
+            om_out = self._last_omega_filt
+
+        # Matched DOB (identical SOS H_filt on model torque inside _update_torque_bias_3d)
+        self._update_torque_bias_3d(pkt, self.q, om_out)
+
+        # Forward-propagate over observation delay [measurement_time_s -> time_s]
+        delay = max(0.0, pkt.time_s - pkt.measurement_time_s)
+        if delay > 1e-9:
+            a_pred, _, _ = self._strapdown_world_accel(pkt, self.q, a_meas)
+            p_now = self.p + self.v * delay + 0.5 * a_pred * (delay * delay)
+            v_now = self.v + a_pred * delay
+            dq_lat = axis_angle_to_quat_wxyz(om_out, float(np.linalg.norm(om_out)) * delay)
+            q_now = normalize_quat_wxyz(quat_multiply_wxyz(self.q, dq_lat), canonical=True)
+        else:
+            p_now = self.p
+            v_now = self.v
+            q_now = self.q
+
+        gim_now, thr_now, fins_now = self._predict_actuators(pkt)
+        return EstimatedState3D(
+            time_s=pkt.time_s,
+            pos_enu_m=(float(p_now[0]), float(p_now[1]), float(p_now[2])),
+            vel_enu_m_s=(float(v_now[0]), float(v_now[1]), float(v_now[2])),
+            quat_wxyz=(float(q_now[0]), float(q_now[1]), float(q_now[2]), float(q_now[3])),
+            omega_body_rad_s=(float(om_out[0]), float(om_out[1]), float(om_out[2])),
+            accel_bias_world_m_s2=(
+                float(self._a_dist_world[0]),
+                float(self._a_dist_world[1]),
+                float(self._a_dist_world[2]),
+            ),
+            gyro_bias_body_rad_s=(float(self.b_g[0]), float(self.b_g[1]), float(self.b_g[2])),
+            torque_bias_body_nm=(
+                float(self.torque_bias_body_nm[0]),
+                float(self.torque_bias_body_nm[1]),
+                float(self.torque_bias_body_nm[2]),
+            ),
+            main_propellant_kg=pkt.main_propellant_kg,
+            rcs_propellant_kg=pkt.rcs_propellant_kg,
+            gear_extension=pkt.gear_extension,
+            fin_deflection_rad=fins_now,
+            fin_extension=pkt.fin_extension,
+            gimbal_rad=gim_now,
+            engine_throttle=thr_now,
+            upper_attached=pkt.upper_attached,
+            on_pad=pkt.on_pad,
+            touchdown_detected=pkt.touchdown_detected,
+            active_engines=pkt.active_engines,
+            restarts_used=pkt.restarts_used,
+            gps_blackout=self._in_gps_blackout,
+            radar_foot_height_m=self._radar_foot_height_m,
+        )
+
     def observe(self, pkt: TelemetryPacket3D) -> EstimatedState3D:
         """Run one 15-state MEKF predict+update cycle and forward-propagate over sensor latency."""
+        if self.gnc_v2.use_strapdown_mekf:
+            return self._observe_strapdown_v2(pkt)
         p_meas = np.asarray(pkt.pos_enu_m, dtype=np.float64)
         v_meas = np.asarray(pkt.vel_enu_m_s, dtype=np.float64)
         q_meas = normalize_quat_wxyz(pkt.quat_wxyz, canonical=True)
@@ -387,9 +731,12 @@ class CausalEstimator3D:
 
         # Low-pass filter bias-corrected angular rate for smooth derivative control
         om_now = om_meas - self.b_g
-        alpha_om = 0.65 if self.sensor_config.gyro_noise_deg_s > 0.0 else 1.0
-        self._last_omega_filt += alpha_om * (om_now - self._last_omega_filt)
-        om_out = self._last_omega_filt
+        if self._csi_omega_filter is not None:
+            om_out = self._csi_omega_filter.filter_sample(om_now, upper_attached=pkt.upper_attached)
+        else:
+            alpha_om = 0.65 if self.sensor_config.gyro_noise_deg_s > 0.0 else 1.0
+            self._last_omega_filt += alpha_om * (om_now - self._last_omega_filt)
+            om_out = self._last_omega_filt
 
         # Causal 3-axis unmodeled disturbance torque observer (rejects external roll/aero torque)
         self._update_torque_bias_3d(pkt, self.q, om_out)
@@ -439,21 +786,24 @@ class CausalEstimator3D:
         self, pkt: TelemetryPacket3D, q_wxyz: NDArray[np.float64], om_b: NDArray[np.float64]
     ) -> None:
         """Estimate unmodeled 3-axis external disturbance torque causally from angular rate."""
+        matched_dob = self.gnc_v2.use_structural_filter
         if (
-            pkt.upper_attached
+            ((not matched_dob) and pkt.upper_attached)
             or pkt.on_pad
             or pkt.touchdown_detected
             or (self._sep_time_s is not None and pkt.measurement_time_s < self._sep_time_s + 0.35)
         ):
             self._prev_ang_sample = None
             self.torque_bias_body_nm[:] = 0.0
+            if self._csi_dob_torque_filter is not None:
+                self._csi_dob_torque_filter.reset((0.0, 0.0), upper_attached=pkt.upper_attached)
             return
         if pkt.packet_dropped:
             # Hold last estimated disturbance torque bias across transient packet dropouts
             return
 
         mass = self._nominal_mass(pkt)
-        mp = self._mass_props(mass, pkt.gear_extension, False, pkt.rcs_propellant_kg)
+        mp = self._mass_props(mass, pkt.gear_extension, pkt.upper_attached, pkt.rcs_propellant_kg)
         i_vec = np.asarray(mp.inertia_diag_kg_m2, dtype=np.float64)
         cur = (
             pkt.measurement_time_s,
@@ -498,7 +848,7 @@ class CausalEstimator3D:
 
         t_mid = 0.5 * (prev[0] + pkt.measurement_time_s)
         srp_drag_mid, srp_cp_mid = self._nominal_srp_terms(
-            float(p_mid[2]), v_mid, q_mid, thr_mid, False, t_mid
+            float(p_mid[2]), v_mid, q_mid, thr_mid, pkt.upper_attached, t_mid
         )
         ft = compute_forces_and_torques_3d(
             altitude_m=float(p_mid[2]),
@@ -515,23 +865,34 @@ class CausalEstimator3D:
             wind_lut=self.forecast_wind,
             time_s=t_mid,
             vehicle=self.vehicle,
-            upper_attached=False,
+            upper_attached=pkt.upper_attached,
             axial_drag_multiplier=srp_drag_mid,
             cp_shift_m=srp_cp_mid,
         )
-        # 3-axis causal disturbance torque observer (mirrors DM100 2D estimator.py):
-        #   - X/Y pitch/yaw: rejects unmodeled wind-error & gust aero moments (tau = 0.18 s)
-        #   - Z roll: rejects external roll pulses with fast response (tau = 0.10 s)
+        tau_model = np.asarray(ft.torque_body_nm, dtype=np.float64)
+        if matched_dob and self._csi_dob_torque_filter is not None:
+            # Matched DOB (CDR C1): filter model torque with identical H_filt as gyro omega
+            tau_model = self._csi_dob_torque_filter.filter_sample(
+                tau_model, upper_attached=pkt.upper_attached
+            )
+
         i_mid = 0.5 * (prev[2] + i_vec)
         d_l_dt = (i_vec * om_b - prev[2] * prev[1]) / dt + np.cross(om_mid, i_mid * om_mid)
-        res_3 = d_l_dt - np.asarray(ft.torque_body_nm, dtype=np.float64)
-        tau_xy = 0.26 if self.sensor_config.gyro_noise_deg_s > 0.0 else 0.14
+        res_3 = d_l_dt - tau_model
+        if matched_dob:
+            # CDR Rev 3.1 §3.1 locked Matched DOB time constants & bounds
+            tau_xy = 0.50
+            tau_z = 0.25
+            bounds = (300_000.0, 300_000.0, 18_000.0)
+        else:
+            tau_xy = 0.26 if self.sensor_config.gyro_noise_deg_s > 0.0 else 0.14
+            tau_z = 0.10
+            bounds = (120_000.0, 120_000.0, 12_000.0)
         alphas = (
             1.0 - exp(-dt / tau_xy),
             1.0 - exp(-dt / tau_xy),
-            1.0 - exp(-dt / 0.10),
+            1.0 - exp(-dt / tau_z),
         )
-        bounds = (120_000.0, 120_000.0, 12_000.0)
         for ax_i in range(3):
             r_c = max(-bounds[ax_i], min(bounds[ax_i], float(res_3[ax_i])))
             upd = float(self.torque_bias_body_nm[ax_i]) + alphas[ax_i] * (
@@ -543,9 +904,19 @@ class CausalEstimator3D:
         self, p_new: NDArray[np.float64], v_new: NDArray[np.float64], time_s: float = 0.0
     ) -> None:
         """Reset linear accel residual bias cleanly across the cold separation discontinuity."""
-        self.p = p_new.copy()
-        self.v = v_new.copy()
-        self.b_a[:] = 0.0
+        if not self.gnc_v2.use_strapdown_mekf:
+            self.p = p_new.copy()
+            self.v = v_new.copy()
+            self.b_a[:] = 0.0
+        else:
+            if not self._in_gps_blackout:
+                self.p = p_new.copy()
+                self.v = v_new.copy()
+            self._a_dist_world[:] = 0.0
+            if self._csi_omega_filter is not None:
+                self._csi_omega_filter.set_regime(upper_attached=False, bumpless_xy=(0.0, 0.0))
+            if self._csi_dob_torque_filter is not None:
+                self._csi_dob_torque_filter.reset((0.0, 0.0), upper_attached=False)
         self.torque_bias_body_nm[:] = 0.0
         self._prev_ang_sample = None
         self._sep_time_s = time_s

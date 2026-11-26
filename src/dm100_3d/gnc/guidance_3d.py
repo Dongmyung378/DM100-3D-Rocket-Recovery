@@ -756,8 +756,17 @@ class RtlsController3D:
         for ax in range(3):
             e = float(err_vec[ax])
             stop_r = sqrt(2.0 * 0.78 * a_lims[ax] * abs(e))
-            kp = 3.2 if ax == 2 else 1.8
-            kd = 5.5 if ax == 2 else 4.2
+            if self.gnc_v2.use_structural_filter:
+                # Locked CDR Rev 3.1 §3.1 CSI-certified gains (all 9 regimes GM>=6 dB, PM>=35 deg)
+                if ax == 2:
+                    kp, kd = 1.20, 2.50
+                elif est.upper_attached:
+                    kp, kd = 0.40, 1.20
+                else:
+                    kp, kd = 0.55, 1.65
+            else:
+                kp = 3.2 if ax == 2 else 1.8
+                kd = 5.5 if ax == 2 else 4.2
             des_r = (1.0 if e >= 0.0 else -1.0) * min(r_lims[ax], kp * abs(e), stop_r)
             des_alpha[ax] = max(-a_lims[ax], min(a_lims[ax], kd * (des_r - float(om_b[ax]))))
 
@@ -886,7 +895,7 @@ class RtlsController3D:
     def _compute_hoverslam_ignition_height(self, est: EstimatedState3D, mass: float) -> float:
         s = self.settings
         vz_down = max(0.0, -est.vel_enu_m_s[2])
-        v_td = s.landing_touchdown_speed_m_s
+        v_td = 0.50 if self.gnc_v2.use_strapdown_mekf else s.landing_touchdown_speed_m_s
         if vz_down <= v_td:
             return 0.0
 
@@ -1104,6 +1113,7 @@ class RtlsController3D:
             rate_limit_deg_s=8.0,
             accel_limit_deg_s2=2.5,
             allow_fin=False,
+            use_xy_torque_bias=(self.gnc_v2.use_structural_filter and (not est.on_pad)),
         )
         self.last_diag = GuidanceDiagnostics3D(
             phase="ascent",
@@ -1159,7 +1169,7 @@ class RtlsController3D:
         h_shape = 680.0
         h_vref = max(0.0, h)
         h_c = min(h_vref, h_shape)
-        v_td = s.landing_touchdown_speed_m_s
+        v_td = 0.50 if self.gnc_v2.use_strapdown_mekf else s.landing_touchdown_speed_m_s
         v_stage_b_cap = sqrt(
             v_td * v_td
             + 2.0 * a_lo * h_vref
@@ -1522,6 +1532,13 @@ class RtlsController3D:
         )
 
         meco3 = self.landing_single_engine and h_vref <= 0.25 and est.vel_enu_m_s[2] >= 0.05
+        if (
+            meco3
+            and self.gnc_v2.use_strapdown_mekf
+            and est.radar_foot_height_m is not None
+            and est.radar_foot_height_m > 0.15
+        ):
+            meco3 = False
         if meco3:
             throttle = 0.0
             active_engines = 0
@@ -1730,6 +1747,7 @@ class RtlsController3D:
                         rate_limit_deg_s=6.0,
                         accel_limit_deg_s2=1.0,
                         high_q_guard=False,
+                        use_xy_torque_bias=self.gnc_v2.use_structural_filter,
                     )
                     cmd = ActuatorCommand3D(
                         throttle_cmd=throttle,

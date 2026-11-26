@@ -174,12 +174,12 @@ def main() -> None:
     parser.add_argument(
         "--physics-v2-preset",
         default="legacy",
-        choices=["legacy", "m1", "full"],
+        choices=["legacy", "m1", "m2", "full"],
     )
     parser.add_argument(
         "--gnc-v2-preset",
         default="legacy",
-        choices=["legacy", "m1", "full"],
+        choices=["legacy", "m1", "m2", "full"],
     )
     parser.add_argument(
         "--replay-cases",
