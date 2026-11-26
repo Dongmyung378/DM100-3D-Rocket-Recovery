@@ -1,0 +1,40 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.4",
+	"Category": "",
+	"Description": "DM100 3D 6DOF Orbital Launch & RTLS Offline Cinematic Visualizer (LWC + 1080p MRQ)",
+	"Plugins": [
+		{
+			"Name": "PythonScriptPlugin",
+			"Enabled": true
+		},
+		{
+			"Name": "EditorScriptingUtilities",
+			"Enabled": true
+		},
+		{
+			"Name": "SequencerScripting",
+			"Enabled": true
+		},
+		{
+			"Name": "MovieRenderPipeline",
+			"Enabled": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true
+		},
+		{
+			"Name": "NiagaraMRQ",
+			"Enabled": true
+		},
+		{
+			"Name": "Interchange",
+			"Enabled": true
+		},
+		{
+			"Name": "InterchangeEditor",
+			"Enabled": true
+		}
+	]
+}
