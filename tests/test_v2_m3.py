@@ -9,8 +9,10 @@ import numpy as np
 from dm100_3d.config import DM100VehicleConfig, GncV2Config, PhysicsV2Config
 from dm100_3d.gnc.allocation_3d import Allocation3DInput, PriorityControlAllocator3D
 from dm100_3d.gnc.fdir_3d import CausalFdir3D
+from dm100_3d.gnc.mekf import CausalEstimator3D, SensorConfig3D
 from dm100_3d.gnc.mpc_gfold_3d import MpcGfold3DConfig, OnlineGfoldMpc3D
 from dm100_3d.interfaces import ActuatorCommand3D, TelemetryPacket3D
+from dm100_3d.physics import AtmosphereLUT, Wind3DLUT
 from dm100_3d.physics.faults_3d import (
     ENGINE_OUTER_RIM_RADIUS_M,
     ENGINE_RING_RADIUS_M,
@@ -608,3 +610,89 @@ def test_run_flight_3d_full_v2_summary_smoke() -> None:
     assert "fdir_metrics" in summary
     assert summary["mission_mode"] == "RTLS"
     assert summary["fdir_state"] == "NOMINAL"
+
+
+# ---------------------------------------------------------------------------
+# 6. M3 Regression Guards (Clarabel setup_time heal, EO spindown FF, Fin-Jam Roll DOB reset)
+# ---------------------------------------------------------------------------
+
+
+def test_mpc_clarabel_prewarm_and_smooth_sigma_lossless_reuse() -> None:
+    mpc = OnlineGfoldMpc3D(MpcGfold3DConfig())
+    # Prewarm should leave a clean warm cached solver ready before the first timed flight solve
+    assert mpc._solver is not None
+    sol1 = mpc.solve(
+        time_s=540.0,
+        pos0_enu_m=(-2.0, 3.0, 620.0),
+        vel0_enu_m_s=(0.4, -0.5, -68.0),
+        mass0_kg=10_200.0,
+        dry_mass_kg=6_450.0,
+        t_min_n=79_700.0,
+        t_max_n=183_000.0,
+        isp_eff_s=325.0,
+        gravity_m_s2=9.80665,
+        v_touchdown_m_s=7.9,
+        z_target_m=30.0,
+    )
+    assert sol1 is not None and sol1.feasible and sol1.lossless_ok
+    assert sol1.lossless_ratio_0 >= 0.98 and sol1.iterations <= 35
+    solver_id_1 = id(mpc._solver)
+    assert mpc._solver is not None
+    sol2 = mpc.solve(
+        time_s=540.5,
+        pos0_enu_m=(-1.8, 2.7, 586.0),
+        vel0_enu_m_s=(0.3, -0.4, -65.0),
+        mass0_kg=10_170.0,
+        dry_mass_kg=6_450.0,
+        t_min_n=79_700.0,
+        t_max_n=183_000.0,
+        isp_eff_s=325.0,
+        gravity_m_s2=9.80665,
+        v_touchdown_m_s=7.9,
+        z_target_m=30.0,
+    )
+    assert sol2 is not None and sol2.feasible and sol2.lossless_ok
+    # Warm solver is reused cleanly across update() calls without setup_time poison
+    assert id(mpc._solver) == solver_id_1
+
+
+def test_fdir_causal_spindown_residual_feedforward() -> None:
+    cfg = DM100VehicleConfig()
+    fdir = CausalFdir3D(vehicle=cfg)
+    # Isolate outer engine 1 (+X nozzle at r=0.92 m) while its chamber pressure is decaying at 0.30
+    fdir.engine_failed[1] = True
+    fdir._last_chamber_p_7 = np.array([1.0, 0.30, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)
+    mask_6 = (True, False, True, True, True, True, True)
+    full_t = 1_400_000.0  # 200 kN per engine
+    active_t = 1_200_000.0  # 6 active engines * 200 kN
+    tau_no_res = fdir.causal_asymmetric_torque_ff_nm(
+        engine_mask_7=mask_6, total_thrust_n=active_t, full_thrust_7_n=0.0
+    )
+    tau_with_res = fdir.causal_asymmetric_torque_ff_nm(
+        engine_mask_7=mask_6, total_thrust_n=active_t, full_thrust_7_n=full_t
+    )
+    # Engine 1 (+X) missing yields +0.92 * 200 kN = +184 kNm Y-torque; 30% spindown cancels 30%
+    assert isclose(tau_no_res[1], 0.92 * 200_000.0, rel_tol=1e-3)
+    assert isclose(tau_with_res[1], 0.92 * 140_000.0, rel_tol=1e-3)
+    assert abs(tau_with_res[0]) < 1e-6 and tau_with_res[2] == 0.0
+
+
+def test_mekf_torque_bias_reconfig_reset_clears_roll_bias() -> None:
+    cfg = DM100VehicleConfig()
+    est = CausalEstimator3D(
+        vehicle=cfg,
+        forecast_atmo=AtmosphereLUT(),
+        forecast_wind=Wind3DLUT(),
+        sensor_config=SensorConfig3D(),
+        gnc_v2=GncV2Config.full_v2(),
+    )
+    est.torque_bias_body_nm[:] = np.array([12_000.0, -8_000.0, -2_500.0], dtype=np.float64)
+    est.reset_torque_bias_on_reconfig(upper_attached=False, reset_roll=False)
+    assert est.torque_bias_body_nm[0] == 0.0 and est.torque_bias_body_nm[1] == 0.0
+    assert isclose(float(est.torque_bias_body_nm[2]), -2_500.0, abs_tol=1e-9)
+
+    est.torque_bias_body_nm[:] = np.array([4_000.0, -3_000.0, -2_500.0], dtype=np.float64)
+    est.reset_torque_bias_on_reconfig(upper_attached=False, reset_roll=True)
+    assert isclose(float(est.torque_bias_body_nm[0]), 4_000.0, abs_tol=1e-9)
+    assert isclose(float(est.torque_bias_body_nm[1]), -3_000.0, abs_tol=1e-9)
+    assert est.torque_bias_body_nm[2] == 0.0
