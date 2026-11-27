@@ -694,8 +694,12 @@ class RtlsController3D:
         )
         srp_drag_mult = 1.0
         srp_cp_shift = 0.0
-        if self.gnc_v2.use_srp_iip_feedforward and (not est.upper_attached):
-            t_srp_mid = 0.5 * (cur_t + fut_t)
+        if (
+            self.gnc_v2.use_srp_iip_feedforward
+            and (not est.upper_attached)
+            and est.engine_throttle >= 1e-3
+        ):
+            t_srp_mid = 0.5 * (cur_t + fut_t) if throttle_cmd > 1e-3 else cur_t
             if t_srp_mid > 1.0:
                 v_air_s = self._air_vel(est)
                 spd_s = float(np.linalg.norm(v_air_s))
@@ -1588,17 +1592,23 @@ class RtlsController3D:
             else 1.0
         )
         vb_acc = 2.30 + 0.50 * vb_blend
+        if vertical_body:
+            land_acc_lim = vb_acc
+        elif self.gnc_v2.use_structural_filter:
+            land_acc_lim = 2.20 + 0.85 * _smoothstep((est.engine_throttle - lit_thr) / 0.15)
+        else:
+            land_acc_lim = 3.05
 
         gim, rcs, fins = self._attitude_allocate_3d(
             est,
             q_des,
             throttle,
             rate_limit_deg_s=land_rate_lim,
-            accel_limit_deg_s2=vb_acc if vertical_body else 3.05,
+            accel_limit_deg_s2=land_acc_lim,
             allow_fin=(est.fin_extension >= 0.05 and h > 300.0),
             thrust_tilt_cmd_body_xy=thrust_tilt_body_xy,
             high_q_guard=False,
-            accel_guard_deg_s2=vb_acc if vertical_body else 3.05,
+            accel_guard_deg_s2=land_acc_lim,
             use_xy_torque_bias=(not vertical_body) or self.gnc_v2.use_structural_filter,
         )
         if est.engine_throttle < lit_thr:
