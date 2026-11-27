@@ -1516,12 +1516,12 @@ class RtlsController3D:
                 and (not is_abort)
                 and h_vref > 12.0
             ):
-                tau_lead_mpc = (1.65 if self.gnc_v2.use_structural_filter else 0.55) * min(
-                    1.0, max(0.35, (h_vref - 25.0) / 80.0)
+                tau_lead_mpc = (1.85 if self.gnc_v2.use_structural_filter else 0.55) * min(
+                    1.0, max(0.65, (h_vref - 20.0) / 60.0)
                 )
                 # Include mid-horizon angular-rate projection (capped +/-20 deg) so CSI attitude
                 # inertia during large landing-burn EO / blackout diverts unwinds without overshoot.
-                dt_mid = min(0.55, 0.40 * tau_lead_mpc)
+                dt_mid = min(0.60, 0.40 * tau_lead_mpc)
                 tx_mid = max(-radians(20.0), min(radians(20.0), tilt_x + rate_tx * dt_mid))
                 ty_mid = max(-radians(20.0), min(radians(20.0), tilt_y + rate_ty * dt_mid))
                 a_now_xy = (
@@ -1610,13 +1610,21 @@ class RtlsController3D:
                 mpc_ref = self.online_mpc.sample_reference(est.time_s)
 
             v_xy_mag_now = hypot(est.vel_enu_m_s[0], est.vel_enu_m_s[1])
+            r_xy_now = hypot(est.pos_enu_m[0], est.pos_enu_m[1])
             if self.online_mpc is not None and not is_abort:
-                # CDR C6 unconditional safety floor handoff to Vertical Body (30 m capture gate)
+                # CDR C6 unconditional safety floor handoff to Vertical Body (30 m capture gate);
+                # when a severe EO/blackout leaves r_xy >= 4.5 m at 30 m, let zero-tilt guidance
+                # finish pad centering down to h = 12..22 m instead of prematurely locking 2.4 deg.
                 tilt_now_deg = degrees(tilt_angle_rad(est.quat_wxyz))
                 vb_trigger = (
-                    (h_vref <= 30.0 and tilt_now_deg < 2.5 and v_xy_mag_now < 3.5)
+                    (
+                        h_vref <= 30.0
+                        and tilt_now_deg < 2.5
+                        and v_xy_mag_now < 3.5
+                        and r_xy_now < 4.5
+                    )
                     or (h_vref <= 12.0)
-                    or (h_vref <= 36.0 and mpc_ref is None)
+                    or (h_vref <= 22.0 and mpc_ref is None and r_xy_now < 6.0)
                 )
             else:
                 vb_trigger = h_vref <= 10.0 or (
@@ -1852,7 +1860,14 @@ class RtlsController3D:
             )
             u_z = (1.0 - w_v1) * u_z_mpc + w_v1 * u_z_v1
             fz_req = max(t_min * 0.9, mass * u_z)
-            max_tilt = radians(2.0) + radians(9.5) * _smoothstep((h_vref - 32.0) / 55.0)
+            r_err_mpc = max(r_xy_now, hypot(p_lead_mpc[0], p_lead_mpc[1]))
+            max_tilt = max(
+                radians(2.0) + radians(9.5) * _smoothstep((h_vref - 32.0) / 55.0),
+                radians(2.0)
+                + radians(5.5)
+                * _smoothstep((r_err_mpc - 2.5) / 8.0)
+                * _smoothstep((h_vref - 22.0) / 25.0),
+            )
         else:
             prop_xy = a_xy_cmd - self._land_bxy_smooth - a_cor[0:2]
             if self.landing_single_engine and vz_down <= 0.78 * v_td:
@@ -2651,8 +2666,13 @@ class RtlsController3D:
                 q_des = pointing_dir_to_quat_wxyz(d_des)
 
                 deploy_fins_gl = h > h_ignite + 240.0
-                gl_acc_lim = 1.45 if self.gnc_v2.use_structural_filter else 2.2
-                gl_acc_guard = 2.0 if self.gnc_v2.use_structural_filter else 2.3
+                hi_q_gl = (
+                    _smoothstep((q_pa - 16_000.0) / 10_000.0)
+                    if (self.gnc_v2.use_structural_filter and not has_fj_gl)
+                    else 0.0
+                )
+                gl_acc_lim = 1.45 - 0.30 * hi_q_gl if self.gnc_v2.use_structural_filter else 2.2
+                gl_acc_guard = 2.0 - 0.40 * hi_q_gl if self.gnc_v2.use_structural_filter else 2.3
                 if has_fj_gl and (
                     abs(degrees(roll_angle_rad(est.quat_wxyz))) > 0.8
                     or abs(degrees(est.omega_body_rad_s[2])) > 1.5

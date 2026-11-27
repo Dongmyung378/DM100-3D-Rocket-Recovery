@@ -96,6 +96,8 @@ class CausalFdir3D:
         self.engine_failed: list[bool] = [False] * 7
         self.fin_jammed: list[bool] = [False, False, False, False]
         self.fin_jam_angles_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
+        self._fin_jam_pos_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
+        self._fin_jam_vel_rad_s: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_dm_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self.mission_mode: str = "RTLS"
@@ -291,32 +293,51 @@ class CausalFdir3D:
                     self._prev_fin_meas_rad[j] = meas_j
                     self._prev_fin_dm_rad[j] = dm_j
                     if self.fin_jammed[j]:
-                        # Delay-aware causal lead ONLY during sustained same-sign active runaway
-                        # (2 consecutive steps > 16 deg/s within 0.60 s of detection) so post-lock
-                        # resolver white noise NEVER triggers fake lead spikes into the QP / RCS!
+                        # Causal 2-state alpha-beta tracker separates filtered position from
+                        # delay-compensated velocity lead so active runaway tracks smoothly and
+                        # hard-stop arrival immediately zeroes lead with ZERO overshoot tail!
                         el_fj = (
                             pkt.time_s - self.fin_jam_detected_time_s
                             if self.fin_jam_detected_time_s is not None
                             else 0.0
                         )
-                        sustained_runaway = (
-                            el_fj <= 0.65 and abs(dm_j) > radians(0.28) and (dm_j * prev_dm_j) > 0.0
+                        v_cur = self._fin_jam_vel_rad_s[j]
+                        is_moving = (
+                            el_fj <= 0.45
+                            and abs(dm_j) >= radians(0.18)
+                            and (
+                                (abs(v_cur) > radians(6.0) and (dm_j * v_cur) > 0.0)
+                                or (
+                                    abs(v_cur) <= radians(6.0)
+                                    and (dm_j * prev_dm_j) > 0.0
+                                    and abs(dm_j) > radians(0.26)
+                                )
+                            )
                         )
-                        if sustained_runaway:
-                            # Match true resolver(1) + obs/act delay ticks during active runaway
-                            # so healthy fins cancel jammed-fin torque with near-zero phase lag!
-                            lead_k = min(2.20, 1.15 + 0.95 * self.total_delay_steps)
+                        if is_moving:
+                            pred_p = self._fin_jam_pos_rad[j] + v_cur * dt
+                            innov = meas_j - pred_p
+                            pos_new = max(-f_lim, min(f_lim, pred_p + 0.65 * innov))
+                            v_new = max(-f_rate, min(f_rate, v_cur + (0.45 / dt) * innov))
+                            self._fin_jam_pos_rad[j] = pos_new
+                            self._fin_jam_vel_rad_s[j] = v_new
+                            lead_t = min(1.65, 0.80 + 0.80 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
-                                -f_lim, min(f_lim, meas_j + lead_k * dm_j)
+                                -f_lim, min(f_lim, pos_new + v_new * lead_t)
                             )
                         else:
-                            # Fast settle right after hitting jam stop (el_fj <= 0.75 s) so lead
-                            # overshoot clears in 2 ticks, then smooth alpha=0.18 noise filter.
-                            alpha_settle = 0.50 if el_fj <= 0.75 else 0.18
-                            cur_est = self.fin_jam_angles_rad[j]
-                            self.fin_jam_angles_rad[j] = max(
-                                -f_lim, min(f_lim, cur_est + alpha_settle * (meas_j - cur_est))
+                            self._fin_jam_vel_rad_s[j] = 0.0
+                            alpha_p = 0.60 if el_fj <= 0.55 else 0.18
+                            pos_new = max(
+                                -f_lim,
+                                min(
+                                    f_lim,
+                                    self._fin_jam_pos_rad[j]
+                                    + alpha_p * (meas_j - self._fin_jam_pos_rad[j]),
+                                ),
                             )
+                            self._fin_jam_pos_rad[j] = pos_new
+                            self.fin_jam_angles_rad[j] = pos_new
                         continue
                     slew_step_j = max(
                         abs(float(self._fin_hat[j]) - float(prev_pred[j])),
@@ -328,21 +349,23 @@ class CausalFdir3D:
                         abs(meas_j - float(self._fin_hat[j])),
                     )
                     thresh = max(radians(1.5), 1.5 * slew_step_j)
-                    thresh_fast = max(radians(0.65), 1.35 * slew_step_j)
+                    thresh_fast = max(radians(0.38), 1.35 * slew_step_j)
                     steady_runaway = (slew_step_j < radians(0.35)) and (err_min > radians(1.10))
                     fast_corrob = (
-                        (err_min > thresh_fast) and (roll_kick_deg_s2 > 3.0)
+                        (err_min > thresh_fast) and (roll_kick_deg_s2 > 3.5)
                     ) or steady_runaway
                     if err_min > thresh or fast_corrob:
                         self._fin_err_count[j] += 1
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
-                            lead_init = (
-                                min(2.20, 1.15 + 0.95 * self.total_delay_steps) * dm_j
-                                if abs(dm_j) > radians(0.28)
-                                else 0.0
+                            self._fin_jam_pos_rad[j] = meas_j
+                            v0 = (dm_j / dt) if abs(dm_j) > radians(0.22) else 0.0
+                            v0 = max(-f_rate, min(f_rate, v0))
+                            self._fin_jam_vel_rad_s[j] = v0
+                            lead_t0 = min(1.65, 0.80 + 0.80 * self.total_delay_steps) * dt
+                            self.fin_jam_angles_rad[j] = max(
+                                -f_lim, min(f_lim, meas_j + v0 * lead_t0)
                             )
-                            self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + lead_init))
                             if self.fin_jam_detected_time_s is None:
                                 self.fin_jam_detected_time_s = pkt.time_s
                     else:

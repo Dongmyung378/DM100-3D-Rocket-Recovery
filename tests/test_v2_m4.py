@@ -447,11 +447,81 @@ def test_fin_jam_aero_hinge_load_derating() -> None:
         fin_rate_rad_s=f_rate,
         fin_tau_s=0.08,
         fin_limit_rad=f_lim,
-        dynamic_pressure_pa=12_500.0,
+        dynamic_pressure_pa=24_000.0,
     )
     assert np.isclose(d_vac[0], -radians(1.2), atol=1e-9)
     assert np.isclose(d_hiq[0], -radians(0.6), atol=1e-9)
     assert abs(d_hiq[0]) < 0.55 * abs(d_vac[0])
+
+
+def test_fdir_fin_jam_alpha_beta_zeroes_lead_on_stop() -> None:
+    """Alpha-beta fin-jam tracker leads during active runaway and zeroes lead on stop."""
+    from math import radians
+
+    from dm100_3d.config import DM100VehicleConfig
+    from dm100_3d.gnc.fdir_3d import CausalFdir3D
+    from dm100_3d.interfaces import ActuatorCommand3D, TelemetryPacket3D
+
+    veh = DM100VehicleConfig()
+    fdir = CausalFdir3D(vehicle=veh, observation_delay_steps=1, action_delay_steps=0)
+
+    def _pkt(t: float, f3_deg: float, omz_deg_s: float) -> TelemetryPacket3D:
+        return TelemetryPacket3D(
+            time_s=t,
+            measurement_time_s=t - 0.02,
+            pos_enu_m=(0.0, 0.0, 12_000.0),
+            vel_enu_m_s=(0.0, 0.0, -350.0),
+            quat_wxyz=(1.0, 0.0, 0.0, 0.0),
+            omega_body_rad_s=(0.0, 0.0, radians(omz_deg_s)),
+            accel_body_m_s2=(0.0, 0.0, 10.0),
+            main_propellant_kg=5_000.0,
+            rcs_propellant_kg=200.0,
+            gear_extension=0.0,
+            fin_deflection_rad=(0.0, 0.0, 0.0, radians(f3_deg)),
+            fin_extension=1.0,
+            gimbal_rad=(0.0, 0.0),
+            engine_throttle=0.0,
+            upper_attached=False,
+            on_pad=False,
+            touchdown_detected=False,
+            active_engines=0,
+            restarts_used=1,
+            gps_valid=True,
+            radar_alt_valid=False,
+            radar_range_m=12_000.0,
+            engine_chamber_pressure_ratio_7=(0.0,) * 7,
+        )
+
+    cmd0 = ActuatorCommand3D(
+        throttle_cmd=0.0,
+        active_engines=0,
+        gimbal_rad=(0.0, 0.0),
+        rcs_torque_nm=(0.0, 0.0, 0.0),
+        fin_deflection_rad=(0.0, 0.0, 0.0, 0.0),
+        deploy_fins=True,
+        deploy_gear=False,
+        phase="aero_glide",
+    )
+    for k, (f3, omz) in enumerate(
+        [(0.0, 0.0), (-0.55, -0.15), (-1.10, -0.40), (-1.65, -0.75), (-1.65, -0.75)]
+    ):
+        fdir.record_command(cmd0)
+        st = fdir.update(
+            pkt=_pkt(100.0 + 0.02 * k, f3, omz),
+            q_pa=20_000.0,
+            vel_enu_m_s=(0.0, 0.0, -350.0),
+            pos_enu_m=(0.0, 0.0, 12_000.0),
+            accel_dist_world_m_s2=(0.0, 0.0, 0.0),
+            torque_bias_body_nm=(0.0, 0.0, 0.0),
+            mass_kg=18_000.0,
+        )
+        if k == 3:
+            assert st.fin_jammed_4[3]
+            # Active runaway leads ahead of current measurement (-1.65 deg)
+            assert st.fin_jam_angles_rad_4[3] < radians(-2.0)
+        if k == 4:
+            # Immediate stop detection drops velocity lead -> no overshoot beyond -1.70 deg
+            assert abs(st.fin_jam_angles_rad_4[3] - radians(-1.65)) < radians(0.10)
 
 
 def test_mekf_separation_reset_clears_cross_covariance() -> None:
