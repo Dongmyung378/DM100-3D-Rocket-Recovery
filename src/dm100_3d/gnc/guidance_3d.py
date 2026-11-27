@@ -2533,7 +2533,7 @@ class RtlsController3D:
                 hi_z_cap = 6.0 + (s.glide_max_alpha_deg - 6.0) * (
                     1.0 - _smoothstep((est.pos_enu_m[2] - 19_000.0) / 8_000.0)
                 )
-                q_drop = 11.5 if self.gnc_v2.use_structural_filter else 7.5
+                q_drop = 9.0 if self.gnc_v2.use_structural_filter else 7.5
                 q_cap = min(
                     hi_z_cap,
                     s.glide_max_alpha_deg - q_drop * _smoothstep((q_pa - 3_500.0) / 6_500.0),

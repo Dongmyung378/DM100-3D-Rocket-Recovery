@@ -104,7 +104,7 @@ class OnlineGfoldMpc3D:
         self._settings.verbose = False
         self._settings.presolve_enable = False
         self._settings.max_iter = 35
-        self._settings.time_limit = 0.0085
+        self._settings.time_limit = 0.0065
         self._settings.tol_gap_abs = 1e-3
         self._settings.tol_gap_rel = 1e-3
         self._settings.tol_feas = 1e-3
@@ -630,7 +630,7 @@ class OnlineGfoldMpc3D:
             # enforce strict WCET budget so retries never exceed 12 ms on shared CPU.
             tf_c = max(tf_lo, min(tf_hi, 0.50 * tf_pred + 0.50 * t_kin))
             sol_c = _try_tf(tf_c)
-            if best is None and (perf_counter() - t_all) * 1000.0 < 3.0:
+            if best is None and (perf_counter() - t_all) * 1000.0 < 2.0:
                 if sol_c is not None and not sol_c.lossless_ok:
                     _try_tf(min(tf_hi, tf_c + 0.8))
                 else:
@@ -638,7 +638,7 @@ class OnlineGfoldMpc3D:
         else:
             tf_0 = float(tf_lo + 0.45 * (tf_hi - tf_lo))
             _try_tf(tf_0)
-            if best is None and (perf_counter() - t_all) * 1000.0 < 3.0:
+            if best is None and (perf_counter() - t_all) * 1000.0 < 2.0:
                 _try_tf(float(tf_lo + 0.75 * (tf_hi - tf_lo)))
 
         total_ms = (perf_counter() - t_all) * 1000.0
