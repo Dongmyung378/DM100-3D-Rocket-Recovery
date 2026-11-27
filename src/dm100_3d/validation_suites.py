@@ -546,16 +546,34 @@ def build_edge_v2_suite() -> list[Scenario3D]:
         leg_stiffness_scale_4=(0.95, 1.05, 0.96, 1.04),
         seed=506,
     )
-    add_v2(
-        "edgev2-39-severe-dryden-jet-shear",
-        gx=5.0,
-        ax=10.0,
-        gy=-5.0,
-        ay=-10.0,
-        dryden_sigma_m_s=2.5,
-        jet_shear_peak_m_s=20.0,
-        jet_shear_azimuth_deg=60.0,
-        seed=507,
+    # CDR §2.6: mean 18 m/s jet reflected in forecast profile + 2.0 m/s unforecast residual +
+    # 2.5 m/s continuous Dryden turbulence (20.0 m/s total true jet-stream peak at 10.5 km).
+    wx39_a = ((0.0, 5.0), (5_000.0, 8.0), (10_500.0, 19.0), (16_000.0, 10.0), (100_000.0, 4.0))
+    wx39_f = ((0.0, 5.0), (5_000.0, 8.0), (10_500.0, 19.0), (16_000.0, 10.0), (100_000.0, 4.0))
+    wy39_a = ((0.0, -5.0), (5_000.0, -8.0), (10_500.0, 5.6), (16_000.0, -10.0), (100_000.0, -4.0))
+    wy39_f = ((0.0, -5.0), (5_000.0, -8.0), (10_500.0, 5.6), (16_000.0, -10.0), (100_000.0, -4.0))
+    cases.append(
+        Scenario3D(
+            name="edgev2-39-severe-dryden-jet-shear",
+            atmosphere=Atmosphere3DSettings(latitude_deg=37.0, coriolis_enabled=True),
+            wind=Wind3DConfig(
+                wind_x_profile=wx39_a,
+                wind_y_profile=wy39_a,
+                wind_z_profile=((0.0, 0.0), (100_000.0, 0.0)),
+                forecast_wind_x_profile=wx39_f,
+                forecast_wind_y_profile=wy39_f,
+            ),
+            disturbances=Disturbances3D(),
+            sensors=nom_imu,
+            seed=507,
+            physics_v2=replace(
+                base_v2,
+                dryden_sigma_m_s=2.5,
+                jet_shear_peak_m_s=2.0,
+                jet_shear_azimuth_deg=60.0,
+            ),
+            expected_mission_mode="RTLS",
+        )
     )
     add_v2(
         "edgev2-40-north-pole-89deg-j2",

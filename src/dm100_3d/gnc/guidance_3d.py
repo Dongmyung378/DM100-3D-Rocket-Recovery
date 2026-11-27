@@ -943,6 +943,7 @@ class RtlsController3D:
                 fin_ref_torque_body_nm=fin_ref_tau,
                 fin_jammed_mask=fin_jam_mask,
                 fin_jammed_angles_rad=fin_jam_ang,
+                current_fin_deflection_rad=(est.fin_deflection_rad if has_fin_jam else None),
             )
         )
         # Guard pre-separation RCS torque against lighter post-separation booster inertia
@@ -1448,16 +1449,53 @@ class RtlsController3D:
                 )
                 az_net = a_ff + k_v * (vz_down - v_stage_b_cap)
             az_net = max(-3.5, min(a_max_1_net, az_net))
+            a_t_sm = max(t_min / mass, min(t_max / mass, a_ff + g_loc - float(aero_f[2]) / mass))
 
-            # 2 Hz online N=12 log-mass GFOLD MPC (activates right after 3->1 switch, CDR §3.3)
+            # Zero-tilt unwinding lead state (used by Online GFOLD MPC to cancel 2.5 s CSI
+            # attitude-unwinding phase lag and eliminate lateral limit cycles!)
+            p_lead_mpc = (est.pos_enu_m[0], est.pos_enu_m[1])
+            v_lead_mpc = (est.vel_enu_m_s[0], est.vel_enu_m_s[1])
             if (
                 self.online_mpc is not None
                 and (not self.in_vertical_body)
                 and (not is_abort)
                 and h_vref > 12.0
             ):
+                a_att_m = radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+                denom_gtm = max(lever_trim * mass * a_t_sm, 1.0)
+                lim_gtm = 0.85 * sin(max_gim_rad)
+                gt_xm = asin(max(-lim_gtm, min(lim_gtm, float(tau_aero_b_now[1]) / denom_gtm)))
+                gt_ym = asin(max(-lim_gtm, min(lim_gtm, -float(tau_aero_b_now[0]) / denom_gtm)))
+                th_tr_m = np.clip(
+                    (-aero_f[0:2] / mass - self._land_bxy_smooth - a_cor[0:2]) / max(a_t_sm, 5.0),
+                    -0.25,
+                    0.25,
+                )
+                tx_rm = tilt_x - float(th_tr_m[0])
+                ty_rm = tilt_y - float(th_tr_m[1])
+                tx_rm_eff = (
+                    (0.0 if (tx_rm + 0.80 * gt_xm) * tx_rm < 0.0 else tx_rm + 0.80 * gt_xm)
+                    if tx_rm * gt_xm < 0.0
+                    else tx_rm
+                )
+                ty_rm_eff = (
+                    (0.0 if (ty_rm + 0.80 * gt_ym) * ty_rm < 0.0 else ty_rm + 0.80 * gt_ym)
+                    if ty_rm * gt_ym < 0.0
+                    else ty_rm
+                )
+                p_lead_mpc, v_lead_mpc = predict_zero_tilt_state_3d(
+                    (est.pos_enu_m[0], est.pos_enu_m[1]),
+                    (est.vel_enu_m_s[0], est.vel_enu_m_s[1]),
+                    (tx_rm_eff, ty_rm_eff),
+                    (rate_tx, rate_ty),
+                    a_t_sm,
+                    a_att_m,
+                    x_horizon_cap_s=2.4,
+                )
+                # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=22 m)
                 if (
-                    est.time_s
+                    h_vref > 36.0
+                    and est.time_s
                     >= self.online_mpc.last_solve_time_s
                     + self.online_mpc.cfg.replan_period_s
                     - 1e-9
@@ -1470,22 +1508,18 @@ class RtlsController3D:
                         ],
                         dtype=np.float64,
                     )
-                    z_tgt_mpc = 22.0 if h_vref > 26.0 else 0.0
-                    v_tgt_mpc = (
-                        sqrt(
-                            v_td * v_td
-                            + 2.0 * a_lo * z_tgt_mpc
-                            + ((a_hi - a_lo) / h_shape) * z_tgt_mpc * z_tgt_mpc
-                        )
-                        if z_tgt_mpc > 0.0
-                        else v_td
+                    z_tgt_mpc = 22.0
+                    v_tgt_mpc = sqrt(
+                        v_td * v_td
+                        + 2.0 * a_lo * z_tgt_mpc
+                        + ((a_hi - a_lo) / h_shape) * z_tgt_mpc * z_tgt_mpc
                     )
                     self.online_mpc.solve(
                         time_s=est.time_s,
-                        pos0_enu_m=(est.pos_enu_m[0], est.pos_enu_m[1], h_vref),
+                        pos0_enu_m=(p_lead_mpc[0], p_lead_mpc[1], h_vref),
                         vel0_enu_m_s=(
-                            est.vel_enu_m_s[0],
-                            est.vel_enu_m_s[1],
+                            v_lead_mpc[0],
+                            v_lead_mpc[1],
                             min(est.vel_enu_m_s[2], -0.5),
                         ),
                         mass0_kg=mass,
@@ -1529,7 +1563,6 @@ class RtlsController3D:
             vertical_body = self.in_vertical_body
             if vertical_body:
                 mpc_ref = None
-            a_t_sm = max(t_min / mass, min(t_max / mass, a_ff + g_loc - float(aero_f[2]) / mass))
 
             if vertical_body:
                 lever = lever_trim
@@ -1704,12 +1737,10 @@ class RtlsController3D:
         # Assemble required 3D thrust vector (2 Hz GFOLD MPC upstream of v1 gimbal-trim decoupler)
         if mpc_ref is not None and (not vertical_body):
             p_ref, v_ref, a_ref = mpc_ref
-            p_err_xy = p_ref[0:2] - np.array([est.pos_enu_m[0], est.pos_enu_m[1]], dtype=np.float64)
-            v_err_xy = v_ref[0:2] - np.array(
-                [est.vel_enu_m_s[0], est.vel_enu_m_s[1]], dtype=np.float64
-            )
-            # Routh-Hurwitz critically-damped inner tracker (robust to 1.2 s CSI attitude lag)
-            u_xy = a_ref[0:2] + 0.18 * p_err_xy + 0.85 * v_err_xy - a_cor[0:2]
+            # Track zero-tilt lead state (p_lead_mpc, v_lead_mpc) so CSI attitude lag never rings
+            p_err_xy = p_ref[0:2] - np.array([p_lead_mpc[0], p_lead_mpc[1]], dtype=np.float64)
+            v_err_xy = v_ref[0:2] - np.array([v_lead_mpc[0], v_lead_mpc[1]], dtype=np.float64)
+            u_xy = a_ref[0:2] + 0.12 * p_err_xy + 0.55 * v_err_xy - a_cor[0:2]
             u_z = (
                 float(a_ref[2])
                 + 0.45 * (float(p_ref[2]) - h_vref)
@@ -2400,8 +2431,13 @@ class RtlsController3D:
                     if m_mode == "DOWNRANGE_SPLASHDOWN_ABORT"
                     else k_gl * iip_vec * gl_ramp
                 )
+                a_nrm = float(np.linalg.norm(raw_a_xy))
+                if a_nrm > max_a and a_nrm > 1e-9:
+                    raw_a_xy *= max_a / a_nrm
                 # M3 Fin-Jam AoA Corridor Shift (CDR §3.4: |alpha_retro - delta_jam| <= 8 deg)
-                if self.fdir is not None and any(self.fdir.fin_jammed) and q_pa >= 400.0:
+                # Applied AFTER q_cap so high-q flight preserves hinge/authority corridor!
+                has_fj_gl = self.fdir is not None and any(self.fdir.fin_jammed)
+                if has_fj_gl and self.fdir is not None and q_pa >= 400.0:
                     corridor_half_deg = 7.5
                     for j in range(4):
                         if self.fdir.fin_jammed[j]:
@@ -2411,9 +2447,9 @@ class RtlsController3D:
                             lo_c = d_jam_deg - corridor_half_deg
                             hi_c = d_jam_deg + corridor_half_deg
                             raw_a_xy[ax_j] = max(lo_c, min(hi_c, float(raw_a_xy[ax_j])))
-                a_nrm = float(np.linalg.norm(raw_a_xy))
-                if a_nrm > max_a and a_nrm > 1e-9:
-                    raw_a_xy *= max_a / a_nrm
+                    a_fj_nrm = float(np.linalg.norm(raw_a_xy))
+                    if a_fj_nrm > 12.0 and a_fj_nrm > 1e-9:
+                        raw_a_xy *= 12.0 / a_fj_nrm
                 if est.engine_throttle > 0.01:
                     raw_a_xy[:] = 0.0
 
@@ -2434,9 +2470,9 @@ class RtlsController3D:
                     rate_limit_deg_s=9.0,
                     accel_limit_deg_s2=2.2,
                     allow_fin=True,
-                    rcs_deadband_nm=5_000.0
-                    if (q_pa > 1_000.0 and est.fin_extension >= 0.4)
-                    else 0.0,
+                    rcs_deadband_nm=0.0
+                    if has_fj_gl
+                    else (5_000.0 if (q_pa > 1_000.0 and est.fin_extension >= 0.4) else 0.0),
                     accel_guard_deg_s2=2.3,
                     use_xy_torque_bias=True,
                 )

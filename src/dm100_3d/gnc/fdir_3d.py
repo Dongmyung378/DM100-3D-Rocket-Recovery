@@ -65,7 +65,7 @@ class CausalFdir3D:
         action_delay_steps: int = 0,
         restart_ignition_delay_s: float = 0.20,
         chamber_p_tau_s: float = 0.030,
-        rtls_min_prop_reserve_kg: float = 10_200.0,
+        rtls_min_prop_reserve_kg: float = 11_400.0,
     ) -> None:
         self.vehicle = vehicle
         self.dt_s = float(control_dt_s)
@@ -79,6 +79,7 @@ class CausalFdir3D:
         self._prev_fin_hat = np.zeros(4, dtype=np.float64)
         self._fin_hat = np.zeros(4, dtype=np.float64)
         self._fin_err_count = [0, 0, 0, 0]
+        self._prev_omega_z: float | None = None
 
         # Expected engine throttle & lagged chamber pressure model (7 engines)
         self._eng_thr_hat = np.zeros(7, dtype=np.float64)
@@ -250,19 +251,32 @@ class CausalFdir3D:
                 step_f = max(-f_rate * dt, min(f_rate * dt, df * (1.0 - exp(-dt / f_tau))))
                 self._fin_hat[j] = max(-f_lim, min(f_lim, float(self._fin_hat[j]) + step_f))
 
-            if (not pkt.upper_attached) and pkt.fin_extension >= 0.40 and q_pa >= 300.0:
-                thresh = radians(2.5)
+            om_z_now = float(pkt.omega_body_rad_s[2])
+            roll_kick_deg_s2 = (
+                abs(om_z_now - self._prev_omega_z) * (57.29577951308232 / max(dt, 1e-3))
+                if self._prev_omega_z is not None
+                else 0.0
+            )
+            self._prev_omega_z = om_z_now
+
+            if (not pkt.upper_attached) and pkt.fin_extension >= 0.40:
+                # 0.85 deg (8.5-sigma above 0.10 deg resolver noise) x 2 steps (40 ms),
+                # OR 1-step (20 ms) when corroborated by > 6 deg/s^2 roll kick at high q!
+                thresh = radians(0.85)
+                thresh_fast = radians(1.0)
                 for j in range(4):
                     meas_j = float(pkt.fin_deflection_rad[j])
                     if self.fin_jammed[j]:
-                        # Track runaway until fin settles at jam angle
-                        self.fin_jam_angles_rad[j] = 0.5 * self.fin_jam_angles_rad[j] + 0.5 * meas_j
+                        # Track real-time jammed fin angle immediately without smoothing lag
+                        self.fin_jam_angles_rad[j] = meas_j
                         continue
                     err_j = abs(meas_j - float(prev_pred[j]))
                     err_cur = abs(meas_j - float(self._fin_hat[j]))
-                    if min(err_j, err_cur) > thresh:
+                    err_min = min(err_j, err_cur)
+                    if err_min > thresh:
                         self._fin_err_count[j] += 1
-                        if self._fin_err_count[j] >= 4:
+                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 6.0)
+                        if self._fin_err_count[j] >= 2 or fast_corrob:
                             self.fin_jammed[j] = True
                             self.fin_jam_angles_rad[j] = meas_j
                             if self.fin_jam_detected_time_s is None:
@@ -286,13 +300,13 @@ class CausalFdir3D:
         if not pkt.upper_attached:
             return
         v_now = float(np.linalg.norm(vel_enu_m_s))
-        # Target 1,630 m/s separation speed for guaranteed 700 km Stage 2 orbit insertion
-        dv_need = max(0.0, 1_630.0 - v_now)
-        # Gravity + drag loss multiplier for 6-engine climb (~1.32 low alt -> ~1.10 > 40 km)
+        # Replay-calibrated 6-engine ascent remaining delta-v (CDR-P-M1):
+        # MECO-1 target 1,700 m/s + 6-engine gravity/drag loss (~1,220 m/s from SL -> 0 at 48 km).
+        # Triggers DOWNRANGE_SPLASHDOWN_ABORT for early EO (<~55 s), preserves RTLS for late EO.
+        dv_need = max(0.0, 1_700.0 - v_now)
         alt_km = max(0.0, float(pos_enu_m[2]) / 1_000.0)
-        loss_mult = 1.32 - 0.22 * min(1.0, alt_km / 40.0)
-        dv_eff = dv_need * loss_mult
-        # Approximate effective Isp (interpolated SL 325 s -> vac 355 s)
+        dv_loss_6eng = 1_220.0 * max(0.0, 1.0 - alt_km / 48.0)
+        dv_eff = dv_need + dv_loss_6eng
         isp_eff = 325.0 + 30.0 * min(1.0, alt_km / 30.0)
         m_burn_est = mass_kg * (1.0 - exp(-dv_eff / max(isp_eff * G0, 1.0)))
         m_rem_pred = pkt.main_propellant_kg - m_burn_est

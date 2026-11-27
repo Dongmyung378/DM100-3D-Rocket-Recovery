@@ -51,6 +51,7 @@ class Allocation3DInput:
     fin_ref_torque_body_nm: tuple[float, float, float] | None = None
     fin_jammed_mask: tuple[bool, bool, bool, bool] | None = None
     fin_jammed_angles_rad: tuple[float, float, float, float] | None = None
+    current_fin_deflection_rad: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +157,7 @@ class PriorityControlAllocator3D:
         lo_y, hi_y = self._per_fin_bounds(inp.dynamic_pressure_pa, inp.fin_extension, ay_ret)
         fin_cmd = [0.0, 0.0, 0.0, 0.0]
         fin_tau = np.zeros(3, dtype=np.float64)
+        fin_tau_for_rcs = np.zeros(3, dtype=np.float64)
 
         has_jam = (inp.fin_jammed_mask is not None) and any(inp.fin_jammed_mask)
         if has_jam and (f_gain > 1.0 or inp.fin_jacobian_3x4 is not None):
@@ -229,6 +231,27 @@ class PriorityControlAllocator3D:
 
             fin_cmd = [float(u_sol[0]), float(u_sol[1]), float(u_sol[2]), float(u_sol[3])]
             fin_tau = t_ref + b_fin @ (u_sol - u_ref)
+            # Slew-midpoint fin torque for Stage-3 RCS so 18 kN*m roll RCS instantly absorbs
+            # healthy-fin actuator slew lag (60 deg/s, tau=0.08 s) during Fin-Jam onset!
+            if inp.current_fin_deflection_rad is not None:
+                f_rate = radians(fins.deflection_rate_deg_s)
+                f_tau_act = fins.actuator_time_constant_s
+                half_dt = 0.5 * inp.control_dt_s
+                u_mid = np.zeros(4, dtype=np.float64)
+                for j in range(4):
+                    if jam_mask[j]:
+                        u_mid[j] = u_sol[j]
+                    else:
+                        cur_j = float(inp.current_fin_deflection_rad[j])
+                        df_j = float(u_sol[j]) - cur_j
+                        step_j = max(
+                            -f_rate * half_dt,
+                            min(f_rate * half_dt, df_j * (1.0 - exp(-half_dt / f_tau_act))),
+                        )
+                        u_mid[j] = cur_j + step_j
+                fin_tau_for_rcs = t_ref + b_fin @ (u_mid - u_ref)
+            else:
+                fin_tau_for_rcs = fin_tau
         elif f_gain > 1.0 or inp.fin_axis_eff_nm_per_rad is not None:
             if inp.fin_zero_torque_body_nm is not None and inp.fin_axis_eff_nm_per_rad is not None:
                 tau0 = np.asarray(inp.fin_zero_torque_body_nm, dtype=np.float64)
@@ -279,6 +302,7 @@ class PriorityControlAllocator3D:
                     max(lo_x, min(hi_x, ax_ret + d_roll)),
                 ]
             fin_tau = tau0 + b_mat[:, 0:4] @ np.asarray(fin_cmd, dtype=np.float64)
+            fin_tau_for_rcs = fin_tau
 
         res_after_fin = req_guarded - fin_tau
 
@@ -375,7 +399,7 @@ class PriorityControlAllocator3D:
             else:
                 eff_tvc = tvc_tau
 
-            res_after_tvc = req_guarded - (fin_tau + eff_tvc)
+            res_after_tvc = req_guarded - (fin_tau_for_rcs + eff_tvc)
             lims = (
                 prop.rcs_torque_limit_nm,
                 prop.rcs_torque_limit_nm,
@@ -386,9 +410,10 @@ class PriorityControlAllocator3D:
             # never experiences step discontinuities or zero-g bang-bang slosh pumping.
             axis_guard = guard_rad_s2 / sqrt(3.0)
             i_ref = max(float(i_vec[0]), 1.0)
+            eff_deadband = 0.0 if has_jam else inp.rcs_deadband_nm
             for ax_i in range(3):
                 val = float(res_after_tvc[ax_i])
-                db_i = inp.rcs_deadband_nm * min(1.0, float(i_vec[ax_i]) / i_ref)
+                db_i = eff_deadband * min(1.0, float(i_vec[ax_i]) / i_ref)
                 if db_i > 0.0:
                     aval = abs(val)
                     if aval <= db_i:
@@ -396,7 +421,7 @@ class PriorityControlAllocator3D:
                     elif aval < 1.5 * db_i:
                         val *= (aval - db_i) / (0.5 * db_i)
                 g_tau_i = inp.inertia_diag_kg_m2[ax_i] * guard_rad_s2
-                sup = float(fin_tau[ax_i] + eff_tvc[ax_i])
+                sup = float(fin_tau_for_rcs[ax_i] + eff_tvc[ax_i])
                 lo = max(-lims[ax_i], -g_tau_i - float(bg[ax_i]) - sup)
                 hi = min(lims[ax_i], g_tau_i - float(bg[ax_i]) - sup)
                 rcs_cmd[ax_i] = (
@@ -405,11 +430,11 @@ class PriorityControlAllocator3D:
                     else max(lo, min(hi, val))
                 )
             # Final 3D Euclidean norm check on total commanded angular acceleration
-            tot_acc = (bg + fin_tau + eff_tvc + rcs_cmd) / i_vec
+            tot_acc = (bg + fin_tau_for_rcs + eff_tvc + rcs_cmd) / i_vec
             tot_acc_norm = float(np.linalg.norm(tot_acc))
             if tot_acc_norm > guard_rad_s2 and tot_acc_norm > 1e-12:
                 des_tot = tot_acc * (guard_rad_s2 / tot_acc_norm) * i_vec
-                rcs_scaled = des_tot - (bg + fin_tau + eff_tvc)
+                rcs_scaled = des_tot - (bg + fin_tau_for_rcs + eff_tvc)
                 for ax_i in range(3):
                     rcs_cmd[ax_i] = max(-lims[ax_i], min(lims[ax_i], float(rcs_scaled[ax_i])))
             _ = axis_guard

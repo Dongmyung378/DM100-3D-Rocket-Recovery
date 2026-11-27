@@ -38,7 +38,8 @@ class MpcGfold3DConfig:
     lead_time_s: float = 0.02
     max_tilt_deg: float = 12.0
     final_tilt_deg: float = 1.5
-    max_lat_accel_rate_m_s3: float = 2.5
+    max_lat_accel_rate_m_s3: float = 2.2
+    max_vert_accel_rate_m_s3: float = 14.0
     vertical_align_alt_m: float = 45.0
     glide_slope_max_deg: float = 65.0
     pad_margin_m: float = 2.0
@@ -115,6 +116,23 @@ class OnlineGfoldMpc3D:
         self.total_valid_solves: int = 0
         self.max_solve_ms: float = 0.0
         self.max_iterations: int = 0
+        # Pre-warm Clarabel symbolic LDL factorization once at init (never inside flight solve)
+        self._solve_fixed_tf(
+            tf=10.0,
+            pos0=(0.0, 0.0, 250.0),
+            vel0=(0.0, 0.0, -45.0),
+            mass0_kg=7_400.0,
+            dry_mass_kg=6_200.0,
+            t_min_n=79_700.0,
+            t_max_n=221_400.0,
+            isp_eff_s=325.0,
+            gravity_m_s2=G0,
+            v_touchdown_m_s=8.0,
+            k_vert=7,
+            a_ext_nodes=np.zeros((n, 3), dtype=np.float64),
+            plan_start_s=0.0,
+            z_target_m=22.0,
+        )
 
     def _sp(self, k: int, axis: int) -> int:
         return 7 * k + axis
@@ -198,9 +216,9 @@ class OnlineGfoldMpc3D:
             add_pat([self._usig(k), self._sz(k)])  # -sigma_k - mu1*z_k <= -mu1*(1 + z0_k)
             add_pat([self._usig(k), self._sz(k)])  # +sigma_k + mu2*z_k <= +mu2*(1 + z0_k)
             add_pat([self._ua(k, 2)])  # -uz_k <= -uz_min
-        # Lateral thrust-acceleration rate bounds: |u_{k+1,ax} - u_{k,ax}| <= du_max * dt
+        # 3-axis thrust-acceleration rate bounds: |u_{k+1,ax} - u_{k,ax}| <= du_max * dt
         for k in range(n - 1):
-            for ax in (0, 1):
+            for ax in (0, 1, 2):
                 add_pat([self._ua(k + 1, ax), self._ua(k, ax)])
                 add_pat([self._ua(k + 1, ax), self._ua(k, ax)])
         self._cones.append(clarabel.NonnegativeConeT(row - r0))
@@ -364,9 +382,11 @@ class OnlineGfoldMpc3D:
             # sigma_k <= mu2*(1 - (z_k - z_ref_k)) <=> +sigma_k + mu2*z_k <= +mu2*(1 + z_ref_k)
             set_row([(self._usig(k), 1.0), (self._sz(k), mu2)], mu2 * (1.0 + z_ref_k))
             set_row([(self._ua(k, 2), -1.0)], -(t_min_n / max(mass0_kg, 1.0)) * cos_max)
-        du_lim = self.cfg.max_lat_accel_rate_m_s3 * dt
+        du_lat = self.cfg.max_lat_accel_rate_m_s3 * dt
+        du_vert = self.cfg.max_vert_accel_rate_m_s3 * dt
         for k in range(n - 1):
-            for ax in (0, 1):
+            for ax in (0, 1, 2):
+                du_lim = du_vert if ax == 2 else du_lat
                 set_row([(self._ua(k + 1, ax), 1.0), (self._ua(k, ax), -1.0)], du_lim)
                 set_row([(self._ua(k + 1, ax), -1.0), (self._ua(k, ax), 1.0)], du_lim)
 
@@ -540,20 +560,17 @@ class OnlineGfoldMpc3D:
 
         k_vert = self._compute_k_vert(z0, self.last_valid_solution, z_target_m=z_target_m)
 
-        # 3-point local t_f bracket around previous optimal tf - dt_replan (5-point on first solve)
+        # Bounded 3-point local t_f bracket (<= 3 Clarabel calls/tick -> < 12 ms Kaggle CPU)
         if self.last_valid_solution is not None:
             dt_el = max(0.0, time_s - self.last_valid_solution.plan_start_s)
             tf_c = max(tf_lo, min(tf_hi, self.last_valid_solution.flight_time_s - dt_el))
-            tfs = [max(tf_lo, tf_c - 0.6), tf_c, min(tf_hi, tf_c + 0.6)]
-            # Deduplicate near-identical clamped endpoints
+            tfs = [max(tf_lo, tf_c - 0.5), tf_c, min(tf_hi, tf_c + 0.5)]
             cand_tfs: list[float] = []
             for v in tfs:
                 if not any(abs(v - c) < 0.08 for c in cand_tfs):
                     cand_tfs.append(v)
         else:
-            cand_tfs = [
-                float(tf_lo + frac * (tf_hi - tf_lo)) for frac in (0.12, 0.32, 0.52, 0.72, 0.92)
-            ]
+            cand_tfs = [float(tf_lo + frac * (tf_hi - tf_lo)) for frac in (0.25, 0.55, 0.85)]
 
         best: MpcGfold3DSolution | None = None
         max_it = 0
@@ -579,32 +596,29 @@ class OnlineGfoldMpc3D:
                 if sol.lossless_ok and (best is None or sol.fuel_burned_kg < best.fuel_burned_kg):
                     best = sol
 
-        # Fallback: if 3-point local bracket missed feasibility, try a wider interior sweep
+        # Single midpoint recovery probe only if local bracket completely missed
         if best is None and self.last_valid_solution is not None:
-            for frac in (0.15, 0.35, 0.55, 0.75, 0.92):
-                tf_val = tf_lo + frac * (tf_hi - tf_lo)
-                sol = self._solve_fixed_tf(
-                    tf=float(tf_val),
-                    pos0=pos0_enu_m,
-                    vel0=vel0_enu_m_s,
-                    mass0_kg=mass0_kg,
-                    dry_mass_kg=dry_mass_kg,
-                    t_min_n=t_min_n,
-                    t_max_n=t_max_n,
-                    isp_eff_s=isp_eff_s,
-                    gravity_m_s2=gravity_m_s2,
-                    v_touchdown_m_s=v_touchdown_m_s,
-                    k_vert=k_vert,
-                    a_ext_nodes=a_ext,
-                    plan_start_s=time_s,
-                    z_target_m=z_target_m,
-                )
-                if sol is not None:
-                    max_it = max(max_it, sol.iterations)
-                    if sol.lossless_ok and (
-                        best is None or sol.fuel_burned_kg < best.fuel_burned_kg
-                    ):
-                        best = sol
+            tf_mid = 0.5 * (tf_lo + tf_hi)
+            sol = self._solve_fixed_tf(
+                tf=float(tf_mid),
+                pos0=pos0_enu_m,
+                vel0=vel0_enu_m_s,
+                mass0_kg=mass0_kg,
+                dry_mass_kg=dry_mass_kg,
+                t_min_n=t_min_n,
+                t_max_n=t_max_n,
+                isp_eff_s=isp_eff_s,
+                gravity_m_s2=gravity_m_s2,
+                v_touchdown_m_s=v_touchdown_m_s,
+                k_vert=k_vert,
+                a_ext_nodes=a_ext,
+                plan_start_s=time_s,
+                z_target_m=z_target_m,
+            )
+            if sol is not None:
+                max_it = max(max_it, sol.iterations)
+                if sol.lossless_ok:
+                    best = sol
 
         total_ms = (perf_counter() - t_all) * 1000.0
         self.max_solve_ms = max(self.max_solve_ms, total_ms)
