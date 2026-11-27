@@ -1551,7 +1551,8 @@ class RtlsController3D:
                 # to h=22 m (z_tgt=15 m) so terminal centering finishes smoothly inside MPC
                 # instead of discontinuously jumping to v1 guidance!
                 r_xy_pre = hypot(est.pos_enu_m[0], est.pos_enu_m[1])
-                if (h_vref <= 40.0 and r_xy_pre < 4.0) or h_vref <= 22.0:
+                v_xy_pre = hypot(est.vel_enu_m_s[0], est.vel_enu_m_s[1])
+                if (h_vref <= 40.0 and r_xy_pre < 3.0 and v_xy_pre < 2.5) or h_vref <= 22.0:
                     self._mpc_terminal_latched = True
                 if (
                     h_vref > 22.0
@@ -1623,8 +1624,8 @@ class RtlsController3D:
                     (
                         h_vref <= 30.0
                         and tilt_now_deg < 2.5
-                        and v_xy_mag_now < 3.5
-                        and r_xy_now < 4.0
+                        and v_xy_mag_now < 2.0
+                        and r_xy_now < 3.0
                     )
                     or (h_vref <= 14.0)
                     or (h_vref <= 36.0 and mpc_ref is None)

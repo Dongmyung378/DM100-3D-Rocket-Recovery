@@ -99,6 +99,7 @@ class CausalFdir3D:
         self._fin_jam_pos_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._fin_jam_vel_rad_s: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._fin_jam_lead_scale: list[float] = [1.0, 1.0, 1.0, 1.0]
+        self._fin_jam_stop_count: list[int] = [0, 0, 0, 0]
         self._prev2_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_dm_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
@@ -314,23 +315,28 @@ class CausalFdir3D:
                             else 0.0
                         )
                         v_cur = self._fin_jam_vel_rad_s[j]
-                        is_moving = (
-                            el_fj <= 0.56
-                            and abs(dm_j) >= radians(0.24)
-                            and abs(dm2_j) >= radians(0.42)
+                        # 2-step displacement (dm2) rejects 1-tick resolver noise during runaway
+                        # while single_tick_stall + 2-tick stop_count + gyro ratchet guarantee
+                        # instant, zero-overshoot convergence the moment the fin hits its stop.
+                        still_moving = (
+                            el_fj <= 0.58
+                            and self._fin_jam_stop_count[j] < 2
+                            and abs(dm2_j) >= radians(0.38)
                             and (
-                                (abs(v_cur) > radians(6.0) and (dm_j * v_cur) > 0.0)
+                                (abs(v_cur) > radians(6.0) and (dm2_j * v_cur) > 0.0)
                                 or (
                                     abs(v_cur) <= radians(6.0)
                                     and (dm_j * prev_dm_j) > 0.0
-                                    and abs(dm_j) > radians(0.26)
+                                    and abs(dm_j) >= radians(0.24)
                                 )
                             )
                         )
-                        if is_moving:
+                        single_tick_stall = abs(dm_j) < radians(0.16) and abs(dm2_j) < radians(0.60)
+                        if still_moving and not single_tick_stall:
+                            self._fin_jam_stop_count[j] = 0
                             v_inst = max(-f_rate, min(f_rate, 0.5 * dm2_j / dt))
                             v_new = (
-                                0.55 * v_cur + 0.45 * v_inst
+                                0.60 * v_cur + 0.40 * v_inst
                                 if abs(v_cur) > radians(6.0)
                                 else v_inst
                             )
@@ -338,12 +344,12 @@ class CausalFdir3D:
                             self._fin_jam_vel_rad_s[j] = v_new
                             roll_dir = 1.0 if (fin_roll_sign[j] * v_new) >= 0.0 else -1.0
                             jam_acc = om_z_acc_deg_s2 * roll_dir
-                            if el_fj >= 0.06 and jam_acc < -3.2:
+                            if el_fj >= 0.08 and jam_acc < -3.8:
                                 self._fin_jam_lead_scale[j] = max(
-                                    0.0, self._fin_jam_lead_scale[j] - 0.60
+                                    0.0, self._fin_jam_lead_scale[j] - 0.55
                                 )
                             lead_t = (
-                                min(2.65, 1.15 + 1.40 * self.total_delay_steps)
+                                min(2.55, 1.15 + 1.35 * self.total_delay_steps)
                                 * self._fin_jam_lead_scale[j]
                                 * dt
                             )
@@ -351,19 +357,26 @@ class CausalFdir3D:
                                 -f_lim, min(f_lim, meas_j + v_new * lead_t)
                             )
                         else:
-                            self._fin_jam_vel_rad_s[j] = 0.0
-                            self._fin_jam_lead_scale[j] = 0.0
-                            alpha_p = 0.65 if el_fj <= 0.68 else 0.18
-                            pos_new = max(
-                                -f_lim,
-                                min(
-                                    f_lim,
-                                    self._fin_jam_pos_rad[j]
-                                    + alpha_p * (meas_j - self._fin_jam_pos_rad[j]),
-                                ),
-                            )
-                            self._fin_jam_pos_rad[j] = pos_new
-                            self.fin_jam_angles_rad[j] = pos_new
+                            self._fin_jam_stop_count[j] += 1
+                            if self._fin_jam_stop_count[j] == 1 and el_fj <= 0.58:
+                                # First stall tick: drop lead immediately without corrupting
+                                # lead_scale in case of a rare 1-tick resolver noise dip.
+                                self._fin_jam_pos_rad[j] = meas_j
+                                self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j))
+                            else:
+                                self._fin_jam_vel_rad_s[j] = 0.0
+                                self._fin_jam_lead_scale[j] = 0.0
+                                alpha_p = 0.65 if el_fj <= 0.70 else 0.18
+                                pos_new = max(
+                                    -f_lim,
+                                    min(
+                                        f_lim,
+                                        self._fin_jam_pos_rad[j]
+                                        + alpha_p * (meas_j - self._fin_jam_pos_rad[j]),
+                                    ),
+                                )
+                                self._fin_jam_pos_rad[j] = pos_new
+                                self.fin_jam_angles_rad[j] = pos_new
                         continue
                     slew_step_j = max(
                         abs(float(self._fin_hat[j]) - float(prev_pred[j])),
@@ -386,10 +399,11 @@ class CausalFdir3D:
                             self.fin_jammed[j] = True
                             self._fin_jam_pos_rad[j] = meas_j
                             self._fin_jam_lead_scale[j] = 1.0
+                            self._fin_jam_stop_count[j] = 0
                             v0 = (dm_j / dt) if abs(dm_j) > radians(0.22) else 0.0
                             v0 = max(-f_rate, min(f_rate, v0))
                             self._fin_jam_vel_rad_s[j] = v0
-                            lead_t0 = min(2.65, 1.15 + 1.40 * self.total_delay_steps) * dt
+                            lead_t0 = min(2.55, 1.15 + 1.35 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + v0 * lead_t0)
                             )
