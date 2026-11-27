@@ -952,6 +952,15 @@ class RtlsController3D:
                 fin_jammed_mask=fin_jam_mask,
                 fin_jammed_angles_rad=fin_jam_ang,
                 current_fin_deflection_rad=(est.fin_deflection_rad if has_fin_jam else None),
+                fin_jam_elapsed_s=(
+                    max(0.0, est.time_s - self.fdir.fin_jam_detected_time_s)
+                    if (
+                        has_fin_jam
+                        and self.fdir is not None
+                        and self.fdir.fin_jam_detected_time_s is not None
+                    )
+                    else None
+                ),
                 vb_gimbal_max_step_deg=(1.0 if self.gnc_v2.use_structural_filter else 1.6),
             )
         )
@@ -1675,11 +1684,11 @@ class RtlsController3D:
                     0.90 * self.vehicle.propulsion.rcs_torque_limit_nm / max(lever * mass, 1.0)
                 )
                 if self.gnc_v2.use_structural_filter:
-                    v_ground_safe = 0.10 + 0.55 * ax_lim_rcs * max(t_rem - 0.50, 0.0)
-                    v_deck_cap = 0.08 + 3.0 * _smoothstep((h_vref - 0.5) / 1.8)
+                    v_ground_safe = 0.10 + 0.65 * ax_lim_rcs * max(t_rem - 0.35, 0.0)
+                    v_deck_cap = 0.08 + 3.2 * _smoothstep((h_vref - 0.5) / 1.8)
                     closing = min(
-                        0.55 * r_xy,
-                        sqrt(2.0 * 0.45 * ax_lim_rcs * r_xy),
+                        0.65 * r_xy,
+                        sqrt(2.0 * 0.55 * ax_lim_rcs * r_xy),
                         v_ground_safe,
                         v_deck_cap,
                     )
@@ -2567,7 +2576,7 @@ class RtlsController3D:
                 q_des = pointing_dir_to_quat_wxyz(d_des)
 
                 deploy_fins_gl = h > h_ignite + 240.0
-                gl_acc_lim = 1.9 if self.gnc_v2.use_structural_filter else 2.2
+                gl_acc_lim = 1.45 if self.gnc_v2.use_structural_filter else 2.2
                 gl_acc_guard = 2.0 if self.gnc_v2.use_structural_filter else 2.3
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,

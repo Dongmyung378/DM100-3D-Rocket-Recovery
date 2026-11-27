@@ -52,6 +52,7 @@ class Allocation3DInput:
     fin_jammed_mask: tuple[bool, bool, bool, bool] | None = None
     fin_jammed_angles_rad: tuple[float, float, float, float] | None = None
     current_fin_deflection_rad: tuple[float, float, float, float] | None = None
+    fin_jam_elapsed_s: float | None = None
     vb_gimbal_max_step_deg: float = 1.6
 
 
@@ -297,9 +298,13 @@ class PriorityControlAllocator3D:
             if inp.current_fin_deflection_rad is not None:
                 f_rate = radians(fins.deflection_rate_deg_s)
                 f_tau_act = fins.actuator_time_constant_s
-                dt_pred = 1.5 * inp.control_dt_s
-                gate_lo = radians(0.55)
-                gate_hi = radians(1.25)
+                dt_pred = 2.0 * inp.control_dt_s
+                # Tight slew ramp during first 0.65 s of jam recovery for smooth RCS handoff,
+                # then smoothly widen to [0.75, 1.45] deg so steady resolver noise never chatters.
+                el_j = inp.fin_jam_elapsed_s if inp.fin_jam_elapsed_s is not None else 0.0
+                w_el = max(0.0, min(1.0, (el_j - 0.65) / 0.60))
+                gate_lo = radians(0.15 + 0.60 * w_el)
+                gate_hi = radians(0.45 + 1.00 * w_el)
                 u_mid = np.zeros(4, dtype=np.float64)
                 for j in range(4):
                     if jam_mask[j]:

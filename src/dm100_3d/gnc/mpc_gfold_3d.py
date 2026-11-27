@@ -38,16 +38,18 @@ class MpcGfold3DConfig:
     lead_time_s: float = 0.02
     max_tilt_deg: float = 11.0
     final_tilt_deg: float = 1.5
-    vertical_align_alt_m: float = 52.0
+    vertical_align_alt_m: float = 48.0
     glide_slope_max_deg: float = 65.0
     pad_margin_m: float = 2.0
     lossless_min_ratio: float = 0.98
     max_iter_budget: int = 35
     max_fallback_hold_s: float = 1.50
-    slack_gs_weight: float = 50.0
-    slack_xy_weight: float = 500.0
-    slack_vxy_weight: float = 1_000.0
-    lat_control_weight: float = 0.050
+    slack_gs_weight: float = 150.0
+    slack_xy_weight: float = 2_000.0
+    slack_vxy_weight: float = 4_000.0
+    sigma_lin_weight: float = 1.0
+    sigma_quad_weight: float = 0.50
+    lat_control_weight: float = 0.015
     control_reg_weight: float = 1e-7
 
 
@@ -158,8 +160,10 @@ class OnlineGfoldMpc3D:
     def _build_templates(self) -> None:
         """Construct fixed CSC sparsity for P and A so `solver.update()` never re-factorizes."""
         n = self.cfg.n_steps
-        # Diagonal P for tiny quadratic control smoothing (strictly fixed non-zero pattern)
-        p_idx = [self._ua(k, ax) for k in range(n) for ax in range(3)]
+        # Diagonal P for [ux, uy, uz, sigma] per node (strictly fixed non-zero CSC pattern):
+        # quadratic penalty on sigma_k prevents cliff-dive bang-bang thrust while keeping
+        # dJ/d(sigma_k) > 0 strictly increasing -> exact ||u_k|| == sigma_k losslessness!
+        p_idx = [self._n_state + 4 * k + j for k in range(n) for j in range(4)]
         self._p_mat = sparse.csc_matrix(
             (np.full(len(p_idx), 1e-4, dtype=np.float64), (p_idx, p_idx)),
             shape=(self._n_vars, self._n_vars),
@@ -287,21 +291,24 @@ class OnlineGfoldMpc3D:
         z0_init = log(max(mass0_kg, dry_mass_kg + 1.0))
         z_dry = log(max(dry_mass_kg, 100.0))
 
-        # Populate P diagonal, q linear objective, A data, and b vector in-place:
-        # Smooth quadratic penalty on lateral (ux, uy) prevents bang-bang tilt slams while
-        # keeping uz weight tiny (1e-7) so ||u_0||/sigma_0 >= 0.995 lossless holds exactly!
-        p_data = np.empty(3 * n, dtype=np.float64)
+        # Populate P diagonal [ux, uy, uz, sigma] and q linear objective in-place:
+        # Minimizing sum (w_sig*sigma_k + 0.5*w_sig2*sigma_k^2)*dt has ZERO constant-offset
+        # scaling pollution (unlike -25000*ln(m_N)), strictly enforces ||u_k|| == sigma_k
+        # losslessness (dJ/dsigma_k > 0 everywhere), and by Cauchy-Schwarz produces a smooth
+        # non-cliff-dive deceleration profile matching the v1 Stage-B landing envelope!
+        p_data = np.empty(4 * n, dtype=np.float64)
         p_lat = self.cfg.lat_control_weight * dt
         p_z = self.cfg.control_reg_weight * dt
-        for k in range(n):
-            p_data[3 * k] = p_lat
-            p_data[3 * k + 1] = p_lat
-            p_data[3 * k + 2] = p_z
+        p_sig = self.cfg.sigma_quad_weight * dt
         q_obj = np.zeros(self._n_vars, dtype=np.float64)
-        # Maximize final log-mass z_N with dual weight (-25,000) large enough to dominate the
-        # tiny mass-burn leverage on soft terminal slacks (~0.35 << 2.0), guaranteeing exact
-        # Acikmese-Ploen lossless convexification (||u_0||/sigma_0 >= 0.999) on every solve!
-        q_obj[self._sz(n)] = -25_000.0
+        q_sig = self.cfg.sigma_lin_weight * dt
+        for k in range(n):
+            p_data[4 * k] = p_lat
+            p_data[4 * k + 1] = p_lat
+            p_data[4 * k + 2] = p_z
+            p_data[4 * k + 3] = p_sig
+            q_obj[self._usig(k)] = q_sig
+        q_obj[self._sz(n)] = -1.0
         for k in range(1, n):
             q_obj[self._sgs(k)] = self.cfg.slack_gs_weight * dt
         q_obj[self._s_xy_off] = self.cfg.slack_xy_weight
@@ -414,9 +421,9 @@ class OnlineGfoldMpc3D:
         # Tapers smoothly with initial altitude AND remaining horizon down to final_tilt_deg so
         # the 4.5 s CSI-certified attitude loop finishes unwinding well before h = 30 m handoff.
         tan_fin = tan(radians(self.cfg.final_tilt_deg))
-        alt_frac = min(1.0, max(0.0, (float(pos0[2]) - 55.0) / 140.0))
-        top_tilt_deg = 2.5 + (self.cfg.max_tilt_deg - 2.5) * alt_frac
-        mid_tilt_deg = min(3.2, top_tilt_deg)
+        alt_frac = min(1.0, max(0.0, (float(pos0[2]) - 48.0) / 70.0))
+        top_tilt_deg = 3.0 + (self.cfg.max_tilt_deg - 3.0) * alt_frac
+        mid_tilt_deg = min(3.5, top_tilt_deg)
         for k in range(n):
             if k >= k_vert:
                 t_lim = tan_fin
