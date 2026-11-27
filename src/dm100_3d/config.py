@@ -322,6 +322,36 @@ class PhysicsV2Config:
     radar_alt_noise_scale: float = 1.0
     fin_resolver_noise_deg: float = 0.10
     prop_gauge_noise_kg: float = 25.0
+    # M3 7-engine cluster dispersions, nozzle side-loads, and injected EO / Fin-Jam faults
+    engine_thrust_bias_7: tuple[float, float, float, float, float, float, float] = (
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+    )
+    engine_ign_delay_s_7: tuple[float, float, float, float, float, float, float] = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    side_load_peak_n: float = 2_000.0
+    engine_out_index: int | None = None
+    engine_out_time_s: float | None = None
+    engine_out_phase: str | None = None
+    engine_out_phase_elapsed_s: float = 0.0
+    engine_out_spindown_tau_s: float = 0.25
+    fin_jam_index: int | None = None
+    fin_jam_time_s: float | None = None
+    fin_jam_phase: str | None = None
+    fin_jam_phase_elapsed_s: float = 0.0
+    fin_jam_angle_deg: float | None = None
 
     def any_enabled(self) -> bool:
         return any(

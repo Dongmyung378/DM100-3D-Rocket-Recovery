@@ -29,6 +29,16 @@ from dm100_3d.physics.earth_wgs84 import (
     wgs84_normal_gravity,
     wgs84_radii_of_curvature,
 )
+from dm100_3d.physics.faults_3d import (
+    ENGINE_NOZZLE_XY_M,
+    ENGINE_OUTER_RIM_RADIUS_M,
+    ENGINE_RING_RADIUS_M,
+    SYMMETRIC_3ENG_MASKS,
+    ClusterStepOutput3D,
+    EngineClusterFaultModel3D,
+    FaultSettings3D,
+    default_engine_mask_for_count,
+)
 from dm100_3d.physics.feed_3d import (
     FeedRates,
     FeedSettings,
@@ -110,6 +120,14 @@ __all__ = [
     "DualTankSloshResponse",
     "DualTankSloshSettings",
     "DualTankSloshState",
+    "ENGINE_NOZZLE_XY_M",
+    "ENGINE_OUTER_RIM_RADIUS_M",
+    "ENGINE_RING_RADIUS_M",
+    "SYMMETRIC_3ENG_MASKS",
+    "ClusterStepOutput3D",
+    "EngineClusterFaultModel3D",
+    "FaultSettings3D",
+    "default_engine_mask_for_count",
     "FeedRates",
     "FeedSettings",
     "FeedState",

@@ -67,6 +67,8 @@ class ActuatorCommand3D:
     phase: str = "ascent"
     engine_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
     engine_throttles_7: tuple[float, float, float, float, float, float, float] | None = None
+    mission_mode: str = "RTLS"
+    fdir_state: str = "NOMINAL"
 
 
 @dataclass(frozen=True, slots=True)

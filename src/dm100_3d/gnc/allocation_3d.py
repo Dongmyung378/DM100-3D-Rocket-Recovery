@@ -45,6 +45,12 @@ class Allocation3DInput:
     # weathercock torque and cos(alpha) lift projection; matches DM100 2D guidance.py)
     fin_zero_torque_body_nm: tuple[float, float, float] | None = None
     fin_axis_eff_nm_per_rad: tuple[float, float, float] | None = None
+    # Optional M3 3x4 individual-fin Jacobian & Fin-Jam FDIR reconfiguration inputs
+    fin_jacobian_3x4: np.ndarray | None = None
+    fin_ref_deflection_rad: tuple[float, float, float, float] | None = None
+    fin_ref_torque_body_nm: tuple[float, float, float] | None = None
+    fin_jammed_mask: tuple[bool, bool, bool, bool] | None = None
+    fin_jammed_angles_rad: tuple[float, float, float, float] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +106,9 @@ class PriorityControlAllocator3D:
         # Fin 1 (-X, +Y lift): tau_x = -az*L, tau_z = -rc*L
         # Fin 2 (+Y, +X lift): tau_y = +az*L, tau_z = -rc*L
         # Fin 3 (-Y, +X lift): tau_y = +az*L, tau_z = +rc*L
-        if inp.fin_axis_eff_nm_per_rad is not None:
+        if inp.fin_jacobian_3x4 is not None:
+            b_mat[:, 0:4] = np.asarray(inp.fin_jacobian_3x4, dtype=np.float64).reshape(3, 4)
+        elif inp.fin_axis_eff_nm_per_rad is not None:
             # Exact finite-difference axis slopes:
             #   eff_x = d(tau_x)/d(d_yaw)   (< 0, shared across fins 0,1)
             #   eff_y = d(tau_y)/d(d_pitch) (> 0, shared across fins 2,3)
@@ -149,7 +157,79 @@ class PriorityControlAllocator3D:
         fin_cmd = [0.0, 0.0, 0.0, 0.0]
         fin_tau = np.zeros(3, dtype=np.float64)
 
-        if f_gain > 1.0 or inp.fin_axis_eff_nm_per_rad is not None:
+        has_jam = (inp.fin_jammed_mask is not None) and any(inp.fin_jammed_mask)
+        if has_jam and (f_gain > 1.0 or inp.fin_jacobian_3x4 is not None):
+            # --- M3 Fin-Jam Reconfiguration: 3x4 Jacobian + roll-weighted (10x) bounded QP ---
+            b_fin = b_mat[:, 0:4]
+            if inp.fin_ref_deflection_rad is not None and inp.fin_ref_torque_body_nm is not None:
+                u_ref = np.asarray(inp.fin_ref_deflection_rad, dtype=np.float64)
+                t_ref = np.asarray(inp.fin_ref_torque_body_nm, dtype=np.float64)
+            else:
+                u_ref = np.array([ay_ret, ay_ret, ax_ret, ax_ret], dtype=np.float64)
+                t_ref = (
+                    np.asarray(inp.fin_zero_torque_body_nm, dtype=np.float64) + b_fin @ u_ref
+                    if inp.fin_zero_torque_body_nm is not None
+                    else np.zeros(3, dtype=np.float64)
+                )
+            jam_mask = inp.fin_jammed_mask
+            assert jam_mask is not None
+            jam_ang = inp.fin_jammed_angles_rad or (0.0, 0.0, 0.0, 0.0)
+            bounds_4 = [(lo_y, hi_y), (lo_y, hi_y), (lo_x, hi_x), (lo_x, hi_x)]
+            feather_4 = [ay_ret, ay_ret, ax_ret, ax_ret]
+
+            u_sol = np.array(feather_4, dtype=np.float64)
+            free_idx: list[int] = []
+            tau_jam_delta = np.zeros(3, dtype=np.float64)
+            for j in range(4):
+                if jam_mask[j]:
+                    u_j = max(-self._fin_lim, min(self._fin_lim, float(jam_ang[j])))
+                    u_sol[j] = u_j
+                    tau_jam_delta += b_fin[:, j] * (u_j - float(u_ref[j]))
+                else:
+                    free_idx.append(j)
+                    lo_j, hi_j = bounds_4[j]
+                    u_sol[j] = max(lo_j, min(hi_j, feather_4[j]))
+
+            if free_idx:
+                if inp.allow_fin_allocation:
+                    # Healthy-fin target: req_guarded = t_ref + tau_jam_delta + B_free*(u - u_ref)
+                    rhs_tau = req_guarded - t_ref - tau_jam_delta
+                    # Weight vector: roll axis 10x priority (low Izz << Ixx; CDR §3.4)
+                    w_vec = np.array([1.0, 1.0, 10.0], dtype=np.float64)
+                    reg_w = 1e-4 * max(float(np.max(np.abs(b_fin))) ** 2, 1.0)
+                else:
+                    # Feather healthy fins while cancelling jammed fin's roll torque
+                    rhs_tau = req_guarded - t_ref - tau_jam_delta
+                    w_vec = np.array([0.05, 0.05, 10.0], dtype=np.float64)
+                    reg_w = 1e-2 * max(float(np.max(np.abs(b_fin))) ** 2, 1.0)
+
+                b_free = b_fin[:, free_idx]
+                u_ref_f = u_ref[free_idx]
+                u_f = u_sol[free_idx] - u_ref_f
+                u_f_lo = np.array([bounds_4[j][0] - float(u_ref[j]) for j in free_idx])
+                u_f_hi = np.array([bounds_4[j][1] - float(u_ref[j]) for j in free_idx])
+                u_f_feath = np.array([feather_4[j] - float(u_ref[j]) for j in free_idx])
+
+                # Normal equations H = B_f^T W^2 B_f + reg*I, g = B_f^T W^2 rhs + reg*u_feath
+                wb = b_free * w_vec[:, None]
+                h_mat = wb.T @ wb + reg_w * np.eye(len(free_idx), dtype=np.float64)
+                g_vec = wb.T @ (w_vec * rhs_tau) + reg_w * u_f_feath
+
+                # Exact coordinate-descent active-set box QP on 3x3 SPD matrix (< 0.03 ms)
+                for _ in range(25):
+                    for k in range(len(free_idx)):
+                        h_kk = float(h_mat[k, k])
+                        if h_kk <= 1e-12:
+                            continue
+                        res_k = float(g_vec[k]) - float(h_mat[k, :] @ u_f) + h_kk * float(u_f[k])
+                        u_f[k] = max(float(u_f_lo[k]), min(float(u_f_hi[k]), res_k / h_kk))
+
+                for k, j in enumerate(free_idx):
+                    u_sol[j] = float(u_ref_f[k] + u_f[k])
+
+            fin_cmd = [float(u_sol[0]), float(u_sol[1]), float(u_sol[2]), float(u_sol[3])]
+            fin_tau = t_ref + b_fin @ (u_sol - u_ref)
+        elif f_gain > 1.0 or inp.fin_axis_eff_nm_per_rad is not None:
             if inp.fin_zero_torque_body_nm is not None and inp.fin_axis_eff_nm_per_rad is not None:
                 tau0 = np.asarray(inp.fin_zero_torque_body_nm, dtype=np.float64)
                 eff_yaw, eff_pitch, eff_roll = inp.fin_axis_eff_nm_per_rad

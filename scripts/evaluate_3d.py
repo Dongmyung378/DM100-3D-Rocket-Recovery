@@ -88,7 +88,11 @@ def _run_one(
     want_replay = replay_dir_str is not None and scen.name in replay_allowlist
     t0 = perf_counter()
     try:
-        phys_v2 = _resolve_physics_v2(phys_preset)
+        phys_v2 = (
+            scen.physics_v2
+            if (scen.physics_v2 is not None and phys_preset != "legacy")
+            else _resolve_physics_v2(phys_preset)
+        )
         gnc_v2 = _resolve_gnc_v2(gnc_preset)
         sensor_seed = _derive_sensor_seed(
             scen.seed, physics_preset=phys_preset, case_index=case_idx
