@@ -2533,11 +2533,23 @@ class RtlsController3D:
                 hi_z_cap = 6.0 + (s.glide_max_alpha_deg - 6.0) * (
                     1.0 - _smoothstep((est.pos_enu_m[2] - 19_000.0) / 8_000.0)
                 )
-                q_drop = 9.0 if self.gnc_v2.use_structural_filter else 7.5
-                q_cap = min(
-                    hi_z_cap,
-                    s.glide_max_alpha_deg - q_drop * _smoothstep((q_pa - 3_500.0) / 6_500.0),
-                )
+                if self.gnc_v2.use_structural_filter:
+                    # Two-stage aerodynamic AoA envelope (v2):
+                    # - Subsonic low-q (q <= 9.0 kPa, z ~ 1..7 km): 9.5..10.1 deg authority for
+                    #   post-blackout crossrange closure without high-q slosh-CG roll coupling.
+                    # - Transonic/supersonic high-q (q >= 11.0 kPa, z ~ 8..25 km): 4.5 deg cap
+                    #   suppresses q*alpha^2 roll torque in jet-shear/Dryden & fin-jam glide.
+                    q_cap = min(
+                        hi_z_cap,
+                        s.glide_max_alpha_deg
+                        - 6.5 * _smoothstep((q_pa - 3_500.0) / 5_500.0)
+                        - 5.0 * _smoothstep((q_pa - 9_000.0) / 2_000.0),
+                    )
+                else:
+                    q_cap = min(
+                        hi_z_cap,
+                        s.glide_max_alpha_deg - 7.5 * _smoothstep((q_pa - 3_500.0) / 6_500.0),
+                    )
                 max_a = q_cap * pre_taper
 
                 # Causal 3D upwind drift lead compensating 24 s Hoverslam wind exposure
