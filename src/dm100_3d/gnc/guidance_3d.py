@@ -239,7 +239,6 @@ class RtlsController3D:
         )
         self._fdir_status: FdirStatus3D | None = None
         self._land_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
-        self._prev_glide_om_z: float | None = None
 
     def _nominal_mass(self, est: EstimatedState3D) -> float:
         return (
@@ -873,14 +872,16 @@ class RtlsController3D:
                 return t_f
 
             if has_fin_jam and self.fdir is not None:
-                # Exact per-column 3x4 Jacobian around operating point (incl. jammed fin angle!)
+                # Exact per-column 3x4 Jacobian around ACTUAL operating fin angles (eliminates
+                # 14-deg linearization roll drift when healthy fins deflect far from feather!)
                 jam_m = tuple(self.fdir.fin_jammed)
                 jam_a = tuple(self.fdir.fin_jam_angles_rad)
+                f_lim_op = radians(self.vehicle.fins.deflection_limit_deg)
                 d_base = [
-                    jam_a[0] if jam_m[0] else dy_ref,
-                    jam_a[1] if jam_m[1] else dy_ref,
-                    jam_a[2] if jam_m[2] else dx_ref,
-                    jam_a[3] if jam_m[3] else dx_ref,
+                    jam_a[j]
+                    if jam_m[j]
+                    else max(-f_lim_op, min(f_lim_op, float(est.fin_deflection_rad[j])))
+                    for j in range(4)
                 ]
                 d_ref_t = (d_base[0], d_base[1], d_base[2], d_base[3])
                 t_ref = _eval_fin(d_ref_t)
@@ -1282,7 +1283,11 @@ class RtlsController3D:
         h_shape = 680.0
         h_vref = max(0.0, h)
         h_c = min(h_vref, h_shape)
-        v_td = 0.50 if self.gnc_v2.use_strapdown_mekf else s.landing_touchdown_speed_m_s
+        v_td = (
+            0.40
+            if self.gnc_v2.use_online_mpc
+            else (0.50 if self.gnc_v2.use_strapdown_mekf else s.landing_touchdown_speed_m_s)
+        )
         v_stage_b_cap = sqrt(
             v_td * v_td
             + 2.0 * a_lo * h_vref
@@ -1748,7 +1753,7 @@ class RtlsController3D:
             # Track zero-tilt lead state + exact 50 Hz crosswind/bias decoupling (zero wind drift!)
             p_err_xy = p_ref[0:2] - np.array([p_lead_mpc[0], p_lead_mpc[1]], dtype=np.float64)
             v_err_xy = v_ref[0:2] - np.array([v_lead_mpc[0], v_lead_mpc[1]], dtype=np.float64)
-            a_xy_mpc = a_ref[0:2] + 0.22 * p_err_xy + 0.80 * v_err_xy
+            a_xy_mpc = a_ref[0:2] + 0.35 * p_err_xy + 1.05 * v_err_xy
             prop_xy_mpc = a_xy_mpc - self._land_bxy_smooth - a_cor[0:2]
             f_xy_req = mass * prop_xy_mpc - aero_f[0:2]
             u_z = (
@@ -1758,7 +1763,7 @@ class RtlsController3D:
                 - float(a_cor[2])
             )
             fz_req = max(t_min * 0.9, mass * u_z)
-            max_tilt = radians(2.0) + radians(12.0) * _smoothstep((h_vref - 28.0) / 40.0)
+            max_tilt = radians(2.5) + radians(17.0) * _smoothstep((h_vref - 26.0) / 55.0)
         else:
             prop_xy = a_xy_cmd - self._land_bxy_smooth - a_cor[0:2]
             if self.landing_single_engine and vz_down <= 0.78 * v_td:
@@ -2497,28 +2502,6 @@ class RtlsController3D:
                     accel_guard_deg_s2=gl_acc_guard,
                     use_xy_torque_bias=True,
                 )
-                # Strictly causal 50 Hz IMU-gyro emergency roll-kick damper (bridges the 20 ms
-                # resolver lag during high-q Fin-Jam runaway onset -> keeps fault peak < 25 deg/s^2)
-                om_z_gl = float(est.omega_body_rad_s[2])
-                if (
-                    self.fdir is not None
-                    and (not has_fj_gl)
-                    and self._prev_glide_om_z is not None
-                    and q_pa >= 2_000.0
-                    and est.fin_extension >= 0.90
-                    and est.rcs_propellant_kg > 0.0
-                ):
-                    roll_alpha_gl = (om_z_gl - self._prev_glide_om_z) / s.control_dt_s
-                    if abs(degrees(roll_alpha_gl)) > 5.0:
-                        i_zz_gl = mp.inertia_diag_kg_m2[2]
-                        rz_lim = self.vehicle.propulsion.rcs_roll_torque_limit_nm
-                        rz_emerg = max(-6_000.0, min(6_000.0, -0.55 * i_zz_gl * roll_alpha_gl))
-                        rcs = (
-                            rcs[0],
-                            rcs[1],
-                            max(-rz_lim, min(rz_lim, rcs[2] + rz_emerg)),
-                        )
-                self._prev_glide_om_z = om_z_gl
                 cmd = ActuatorCommand3D(
                     throttle_cmd=0.0,
                     active_engines=0,

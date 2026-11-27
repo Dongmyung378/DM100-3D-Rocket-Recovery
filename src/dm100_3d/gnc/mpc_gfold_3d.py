@@ -36,7 +36,7 @@ class MpcGfold3DConfig:
     n_steps: int = 12
     replan_period_s: float = 0.50
     lead_time_s: float = 0.02
-    max_tilt_deg: float = 16.0
+    max_tilt_deg: float = 19.0
     final_tilt_deg: float = 1.5
     vertical_align_alt_m: float = 45.0
     glide_slope_max_deg: float = 65.0
@@ -398,11 +398,18 @@ class OnlineGfoldMpc3D:
             set_row([(self._ua(k, 1), -1.0)], 0.0)
             set_row([(self._ua(k, 2), -1.0)], 0.0)
 
-        # 4. SecondOrderConeT(3): tilt cone (fixed convex node index k_vert!)
-        tan_max = tan(radians(self.cfg.max_tilt_deg))
+        # 4. SecondOrderConeT(3): progressive tilt cone (fixed convex node index k_vert!)
+        # Tapers smoothly from max_tilt_deg at k=0 down to 4.0 deg at k=k_vert-1, then
+        # final_tilt_deg for k>=k_vert so Clarabel executes large shear diverts EARLY at high
+        # altitude (400..150 m) instead of deferring braking to the bottom and overshooting!
         tan_fin = tan(radians(self.cfg.final_tilt_deg))
         for k in range(n):
-            t_lim = tan_fin if k >= k_vert else tan_max
+            if k >= k_vert:
+                t_lim = tan_fin
+            else:
+                frac_rem = (k_vert - k) / max(k_vert, 1)
+                theta_k_deg = 4.0 + (self.cfg.max_tilt_deg - 4.0) * (frac_rem**0.75)
+                t_lim = tan(radians(theta_k_deg))
             set_row([(self._ua(k, 2), -t_lim)], 0.0)
             set_row([(self._ua(k, 0), -1.0)], 0.0)
             set_row([(self._ua(k, 1), -1.0)], 0.0)
@@ -597,26 +604,26 @@ class OnlineGfoldMpc3D:
 
         if self.last_valid_solution is not None:
             dt_el = max(0.0, time_s - self.last_valid_solution.plan_start_s)
-            tf_c = max(tf_lo, min(tf_hi, self.last_valid_solution.flight_time_s - dt_el))
-            _try_tf(tf_c)
-            if best is not None:
-                if (perf_counter() - t_all) * 1000.0 < 4.5:
-                    nudge = 0.35 if (self.total_solves % 2 == 0) else -0.35
-                    tf_alt = max(tf_lo, min(tf_hi, tf_c + nudge))
-                    if abs(tf_alt - tf_c) >= 0.08:
-                        _try_tf(tf_alt)
-            else:
-                _try_tf(float(0.5 * (tf_lo + tf_hi)))
+            tf_pred = self.last_valid_solution.flight_time_s - dt_el
+            # Smoothly track kinematic time-to-go so updrafts/shears adapt tf in a single call
+            tf_c = max(tf_lo, min(tf_hi, 0.85 * tf_pred + 0.15 * t_kin))
+            sol_c = _try_tf(tf_c)
+            if best is None:
+                if sol_c is not None and not sol_c.lossless_ok:
+                    # Feasible but lossy => tf_c slightly too short; step +1.0 s into lossless zone
+                    _try_tf(min(tf_hi, tf_c + 1.0))
+                if best is None:
+                    _try_tf(float(0.5 * (tf_lo + tf_hi)))
         else:
             tf_0 = float(tf_lo + 0.45 * (tf_hi - tf_lo))
             _try_tf(tf_0)
             if best is not None:
-                if (perf_counter() - t_all) * 1000.0 < 4.5:
-                    _try_tf(float(tf_lo + 0.18 * (tf_hi - tf_lo)))
+                if (perf_counter() - t_all) * 1000.0 < 3.0:
+                    _try_tf(float(tf_lo + 0.30 * (tf_hi - tf_lo)))
             else:
-                _try_tf(float(tf_lo + 0.78 * (tf_hi - tf_lo)))
+                _try_tf(float(tf_lo + 0.72 * (tf_hi - tf_lo)))
                 if best is None:
-                    _try_tf(float(tf_lo + 0.18 * (tf_hi - tf_lo)))
+                    _try_tf(float(tf_lo + 0.25 * (tf_hi - tf_lo)))
 
         total_ms = (perf_counter() - t_all) * 1000.0
         self.max_solve_ms = max(self.max_solve_ms, total_ms)

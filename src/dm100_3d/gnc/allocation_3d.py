@@ -194,17 +194,21 @@ class PriorityControlAllocator3D:
                     u_sol[j] = max(lo_j, min(hi_j, feather_4[j]))
 
             if free_idx:
+                inv_i = 1.0 / np.maximum(i_vec, 1.0)
                 if inp.allow_fin_allocation:
                     # Healthy-fin target: req_guarded = t_ref + tau_jam_delta + B_free*(u - u_ref)
                     rhs_tau = req_guarded - t_ref - tau_jam_delta
-                    # Weight vector: roll axis 10x priority (low Izz << Ixx; CDR §3.4)
-                    w_vec = np.array([1.0, 1.0, 10.0], dtype=np.float64)
-                    reg_w = 1e-4 * max(float(np.max(np.abs(b_fin))) ** 2, 1.0)
+                    # Inertia-normalized angular-accel weighting with 10x roll priority
+                    # (Izz << Ixx; guarantees roll torque exact even if yaw/pitch fin saturates!)
+                    w_vec = np.array([inv_i[0], inv_i[1], 10.0 * inv_i[2]], dtype=np.float64)
+                    reg_scale = 1e-5
                 else:
                     # Feather healthy fins while cancelling jammed fin's roll torque
                     rhs_tau = req_guarded - t_ref - tau_jam_delta
-                    w_vec = np.array([0.05, 0.05, 10.0], dtype=np.float64)
-                    reg_w = 1e-2 * max(float(np.max(np.abs(b_fin))) ** 2, 1.0)
+                    w_vec = np.array(
+                        [0.05 * inv_i[0], 0.05 * inv_i[1], 10.0 * inv_i[2]], dtype=np.float64
+                    )
+                    reg_scale = 1e-3
 
                 b_free = b_fin[:, free_idx]
                 u_ref_f = u_ref[free_idx]
@@ -215,6 +219,7 @@ class PriorityControlAllocator3D:
 
                 # Normal equations H = B_f^T W^2 B_f + reg*I, g = B_f^T W^2 rhs + reg*u_feath
                 wb = b_free * w_vec[:, None]
+                reg_w = reg_scale * max(float(np.max(np.abs(wb))) ** 2, 1e-12)
                 h_mat = wb.T @ wb + reg_w * np.eye(len(free_idx), dtype=np.float64)
                 g_vec = wb.T @ (w_vec * rhs_tau) + reg_w * u_f_feath
 
@@ -232,13 +237,13 @@ class PriorityControlAllocator3D:
 
             fin_cmd = [float(u_sol[0]), float(u_sol[1]), float(u_sol[2]), float(u_sol[3])]
             fin_tau = t_ref + b_fin @ (u_sol - u_ref)
-            # Slew-midpoint fin torque for Stage-3 RCS ONLY when healthy fins are actively slewing
-            # (> 1.5 deg error during Fin-Jam onset); in steady tracking use exact `u_sol` so 0.05
-            # deg fin resolver noise never leaks +/-2 kN*m roll chatter into Stage-3 Roll RCS!
+            # Slew-midpoint fin torque for Stage-3 RCS ONLY when healthy fins are actively slewing:
+            # `cur_j` already lags the true plant fin by 1.0*dt (resolver lag), so advance 1.5*dt
+            # to predict the actual step-midpoint fin angle and avoid Roll-RCS over-correction!
             if inp.current_fin_deflection_rad is not None:
                 f_rate = radians(fins.deflection_rate_deg_s)
                 f_tau_act = fins.actuator_time_constant_s
-                half_dt = 0.5 * inp.control_dt_s
+                dt_pred = 1.5 * inp.control_dt_s
                 slew_gate = radians(1.5)
                 u_mid = np.zeros(4, dtype=np.float64)
                 for j in range(4):
@@ -247,13 +252,14 @@ class PriorityControlAllocator3D:
                     else:
                         cur_j = float(inp.current_fin_deflection_rad[j])
                         df_j = float(u_sol[j]) - cur_j
-                        if abs(df_j) > slew_gate:
+                        step_j = max(
+                            -f_rate * dt_pred,
+                            min(f_rate * dt_pred, df_j * (1.0 - exp(-dt_pred / f_tau_act))),
+                        )
+                        u_pred_j = cur_j + step_j
+                        if abs(float(u_sol[j]) - u_pred_j) > slew_gate:
                             active_fin_slew = True
-                            step_j = max(
-                                -f_rate * half_dt,
-                                min(f_rate * half_dt, df_j * (1.0 - exp(-half_dt / f_tau_act))),
-                            )
-                            u_mid[j] = cur_j + step_j
+                            u_mid[j] = u_pred_j
                         else:
                             u_mid[j] = u_sol[j]
                 fin_tau_for_rcs = t_ref + b_fin @ (u_mid - u_ref)

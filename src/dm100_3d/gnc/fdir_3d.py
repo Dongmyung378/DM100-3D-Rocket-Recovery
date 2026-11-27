@@ -305,10 +305,10 @@ class CausalFdir3D:
                         abs(meas_j - float(self._fin_hat[j])),
                     )
                     thresh = max(radians(1.5), 1.5 * slew_step_j)
-                    thresh_fast = max(radians(0.80), 1.35 * slew_step_j)
-                    if err_min > thresh or (err_min > thresh_fast and roll_kick_deg_s2 > 6.5):
+                    thresh_fast = max(radians(0.85), 1.35 * slew_step_j)
+                    if err_min > thresh or (err_min > thresh_fast and roll_kick_deg_s2 > 3.8):
                         self._fin_err_count[j] += 1
-                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 6.5)
+                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 3.8)
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
                             lead_init = 0.65 * dm_j if abs(dm_j) > radians(0.35) else 0.0
