@@ -347,7 +347,7 @@ class CausalFdir3D:
                             pred_p = self._fin_jam_pos_rad[j] + v_cur * dt
                             pos_new = max(
                                 -f_lim,
-                                min(f_lim, 0.45 * pred_p + 0.55 * meas_j),
+                                min(f_lim, 0.25 * pred_p + 0.75 * meas_j),
                             )
                             self._fin_jam_pos_rad[j] = pos_new
                             self._fin_jam_vel_rad_s[j] = v_new
@@ -405,8 +405,8 @@ class CausalFdir3D:
                     # 60 deg/s healthy-fin counter-slew NEVER false-isolates a second healthy fin!
                     mult_j = 1.6 if already_jammed else 1.0
                     thresh = mult_j * max(radians(1.5), 1.5 * slew_step_j)
-                    thresh_fast_2 = mult_j * max(radians(0.48), 1.35 * slew_step_j)
-                    thresh_fast_1 = mult_j * max(radians(0.85), 1.50 * slew_step_j)
+                    thresh_fast_2 = mult_j * max(radians(0.36), 1.35 * slew_step_j)
+                    thresh_fast_1 = mult_j * max(radians(0.62), 1.45 * slew_step_j)
                     if (
                         err_min > thresh_fast_2
                         and roll_kick_deg_s2 > 3.5
