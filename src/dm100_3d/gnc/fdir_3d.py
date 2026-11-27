@@ -98,6 +98,7 @@ class CausalFdir3D:
         self.fin_jam_angles_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._fin_jam_pos_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._fin_jam_vel_rad_s: list[float] = [0.0, 0.0, 0.0, 0.0]
+        self._fin_jam_lead_scale: list[float] = [1.0, 1.0, 1.0, 1.0]
         self._prev2_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_dm_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
@@ -277,12 +278,15 @@ class CausalFdir3D:
                 self._fin_hat[j] = v_f
 
             om_z_now = float(pkt.omega_body_rad_s[2])
-            roll_kick_deg_s2 = (
-                abs(om_z_now - self._prev_omega_z) * (57.29577951308232 / max(dt, 1e-3))
+            om_z_acc_deg_s2 = (
+                (om_z_now - self._prev_omega_z) * (57.29577951308232 / max(dt, 1e-3))
                 if self._prev_omega_z is not None
                 else 0.0
             )
+            roll_kick_deg_s2 = abs(om_z_acc_deg_s2)
             self._prev_omega_z = om_z_now
+            # Verified roll torque sign d(tau_z)/d(delta_j) for grid fins 0..3
+            fin_roll_sign = (1.0, -1.0, -1.0, 1.0)
 
             # Monitor only once fins are fully deployed (>= 0.90) to avoid entry-burn unfolding
             if (not pkt.upper_attached) and pkt.fin_extension >= 0.90:
@@ -298,11 +302,12 @@ class CausalFdir3D:
                     self._prev_fin_meas_rad[j] = meas_j
                     self._prev_fin_dm_rad[j] = dm_j
                     if self.fin_jammed[j]:
-                        # Zero-windup causal 2-step velocity lead tracker:
-                        # - Uses 2-step slope (dm2 / 2dt) for 2x noise rejection & zero windup.
-                        # - Requires both 1-step (|dm|>=0.24 deg) & 2-step (|dm2|>=0.42 deg)
-                        #   same-sign motion so hard-stop arrival IMMEDIATELY zeroes lead with
-                        #   zero overshoot spike or tail!
+                        # Zero-windup causal 2-step velocity lead tracker with monotonic gyro
+                        # over-compensation ratchet:
+                        # - Delay-matched lead tracks full-swing runaway (up to 13 deg) tightly.
+                        # - Monotonic gyro ratchet (jam_acc < -3.2 deg/s^2) immediately cuts lead
+                        #   the instant healthy fins overtake the jammed fin at hard-stop arrival,
+                        #   eliminating the 1-2 tick delayed-resolver overshoot spike!
                         el_fj = (
                             pkt.time_s - self.fin_jam_detected_time_s
                             if self.fin_jam_detected_time_s is not None
@@ -310,7 +315,7 @@ class CausalFdir3D:
                         )
                         v_cur = self._fin_jam_vel_rad_s[j]
                         is_moving = (
-                            el_fj <= 0.48
+                            el_fj <= 0.56
                             and abs(dm_j) >= radians(0.24)
                             and abs(dm2_j) >= radians(0.42)
                             and (
@@ -331,13 +336,24 @@ class CausalFdir3D:
                             )
                             self._fin_jam_pos_rad[j] = meas_j
                             self._fin_jam_vel_rad_s[j] = v_new
-                            lead_t = min(2.10, 1.05 + 0.95 * self.total_delay_steps) * dt
+                            roll_dir = 1.0 if (fin_roll_sign[j] * v_new) >= 0.0 else -1.0
+                            jam_acc = om_z_acc_deg_s2 * roll_dir
+                            if el_fj >= 0.06 and jam_acc < -3.2:
+                                self._fin_jam_lead_scale[j] = max(
+                                    0.0, self._fin_jam_lead_scale[j] - 0.60
+                                )
+                            lead_t = (
+                                min(2.65, 1.15 + 1.40 * self.total_delay_steps)
+                                * self._fin_jam_lead_scale[j]
+                                * dt
+                            )
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + v_new * lead_t)
                             )
                         else:
                             self._fin_jam_vel_rad_s[j] = 0.0
-                            alpha_p = 0.65 if el_fj <= 0.58 else 0.18
+                            self._fin_jam_lead_scale[j] = 0.0
+                            alpha_p = 0.65 if el_fj <= 0.68 else 0.18
                             pos_new = max(
                                 -f_lim,
                                 min(
@@ -369,10 +385,11 @@ class CausalFdir3D:
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
                             self._fin_jam_pos_rad[j] = meas_j
+                            self._fin_jam_lead_scale[j] = 1.0
                             v0 = (dm_j / dt) if abs(dm_j) > radians(0.22) else 0.0
                             v0 = max(-f_rate, min(f_rate, v0))
                             self._fin_jam_vel_rad_s[j] = v0
-                            lead_t0 = min(2.10, 1.05 + 0.95 * self.total_delay_steps) * dt
+                            lead_t0 = min(2.65, 1.15 + 1.40 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + v0 * lead_t0)
                             )

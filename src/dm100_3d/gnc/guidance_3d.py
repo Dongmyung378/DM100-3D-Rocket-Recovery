@@ -1516,12 +1516,12 @@ class RtlsController3D:
                 and (not is_abort)
                 and h_vref > 12.0
             ):
-                tau_lead_mpc = (1.85 if self.gnc_v2.use_structural_filter else 0.55) * min(
+                tau_lead_mpc = (2.15 if self.gnc_v2.use_structural_filter else 0.55) * min(
                     1.0, max(0.65, (h_vref - 20.0) / 60.0)
                 )
                 # Include mid-horizon angular-rate projection (capped +/-20 deg) so CSI attitude
                 # inertia during large landing-burn EO / blackout diverts unwinds without overshoot.
-                dt_mid = min(0.60, 0.40 * tau_lead_mpc)
+                dt_mid = min(0.70, 0.40 * tau_lead_mpc)
                 tx_mid = max(-radians(20.0), min(radians(20.0), tilt_x + rate_tx * dt_mid))
                 ty_mid = max(-radians(20.0), min(radians(20.0), tilt_y + rate_ty * dt_mid))
                 a_now_xy = (
@@ -1842,7 +1842,7 @@ class RtlsController3D:
             # Track attitude-lead state + exact 50 Hz crosswind/bias decoupling (zero wind drift!)
             p_err_xy = p_ref[0:2] - np.array([p_lead_mpc[0], p_lead_mpc[1]], dtype=np.float64)
             v_err_xy = v_ref[0:2] - np.array([v_lead_mpc[0], v_lead_mpc[1]], dtype=np.float64)
-            a_xy_mpc = a_ref[0:2] + 0.35 * p_err_xy + 1.15 * v_err_xy
+            a_xy_mpc = a_ref[0:2] + 0.35 * p_err_xy + 1.30 * v_err_xy
             prop_xy_mpc = a_xy_mpc - self._land_bxy_smooth - a_cor[0:2]
             f_xy_req = mass * prop_xy_mpc - aero_f[0:2]
             u_z_mpc = (
@@ -2670,12 +2670,12 @@ class RtlsController3D:
 
                 deploy_fins_gl = h > h_ignite + 240.0
                 hi_q_gl = (
-                    _smoothstep((q_pa - 16_000.0) / 10_000.0)
+                    _smoothstep((q_pa - 6_000.0) / 7_000.0)
                     if (self.gnc_v2.use_structural_filter and not has_fj_gl)
                     else 0.0
                 )
-                gl_acc_lim = 1.45 - 0.30 * hi_q_gl if self.gnc_v2.use_structural_filter else 2.2
-                gl_acc_guard = 2.0 - 0.40 * hi_q_gl if self.gnc_v2.use_structural_filter else 2.3
+                gl_acc_lim = 1.45 - 0.35 * hi_q_gl if self.gnc_v2.use_structural_filter else 2.2
+                gl_acc_guard = 1.85 - 0.45 * hi_q_gl if self.gnc_v2.use_structural_filter else 2.3
                 if has_fj_gl and (
                     abs(degrees(roll_angle_rad(est.quat_wxyz))) > 0.8
                     or abs(degrees(est.omega_body_rad_s[2])) > 1.5
