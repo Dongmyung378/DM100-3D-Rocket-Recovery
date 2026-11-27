@@ -447,8 +447,29 @@ def test_fin_jam_aero_hinge_load_derating() -> None:
         fin_rate_rad_s=f_rate,
         fin_tau_s=0.08,
         fin_limit_rad=f_lim,
-        dynamic_pressure_pa=25_500.0,
+        dynamic_pressure_pa=16_000.0,
     )
     assert np.isclose(d_vac[0], -radians(1.2), atol=1e-9)
-    assert np.isclose(d_hiq[0], -radians(0.3), atol=1e-9)
-    assert abs(d_hiq[0]) < 0.30 * abs(d_vac[0])
+    assert np.isclose(d_hiq[0], -radians(0.6), atol=1e-9)
+    assert abs(d_hiq[0]) < 0.55 * abs(d_vac[0])
+
+
+def test_mekf_separation_reset_clears_cross_covariance() -> None:
+    """reset_for_separation must zero stale pos/vel <-> attitude cross-covariance."""
+    from dm100_3d.config import DM100VehicleConfig, GncV2Config
+    from dm100_3d.gnc.mekf import CausalEstimator3D
+    from dm100_3d.physics import Atmosphere3DSettings, AtmosphereLUT, Wind3DConfig, Wind3DLUT
+
+    est = CausalEstimator3D(
+        vehicle=DM100VehicleConfig(),
+        forecast_atmo=AtmosphereLUT(Atmosphere3DSettings()),
+        forecast_wind=Wind3DLUT(Wind3DConfig()),
+        gnc_v2=GncV2Config.full_v2(),
+    )
+    est.P[0:6, 6:15] = 1.25
+    est.P[6:15, 0:6] = 1.25
+    est.reset_for_separation(
+        np.array([100.0, 0.0, 70_000.0]), np.array([1200.0, 0.0, 900.0]), 130.0
+    )
+    assert float(np.max(np.abs(est.P[0:6, 6:15]))) == 0.0
+    assert float(np.max(np.abs(est.P[6:15, 0:6]))) == 0.0

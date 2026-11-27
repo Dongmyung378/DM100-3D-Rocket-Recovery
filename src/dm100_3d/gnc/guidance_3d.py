@@ -821,9 +821,9 @@ class RtlsController3D:
             self.fdir is not None
             and any(self.fdir.fin_jammed)
             and self.fdir.fin_jam_detected_time_s is not None
-            and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.85
+            and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.75
         ):
-            # Suppress Roll DOB during the 0.85 s Fin-Jam runaway & healthy-fin reconfiguration
+            # Suppress Roll DOB during the 0.75 s Fin-Jam runaway & healthy-fin reconfiguration
             # slew so transient resolver lag cannot wind up wrong-sign roll bias.
             tb[2] = 0.0
         if (
@@ -1984,8 +1984,10 @@ class RtlsController3D:
             land_acc_lim = vb_acc
         elif self.gnc_v2.use_structural_filter:
             ign_acc_ramp = _smoothstep((el_lb - 0.30) / 0.55)
+            # Ramp across 1-engine ignition spool-up [lit_thr -> lit_thr + 0.030] so single-engine
+            # powered descent (thr ~ 0.055..0.14) receives full 2.80 deg/s^2 attitude authority.
             land_acc_lim = 1.35 + 1.45 * ign_acc_ramp * _smoothstep(
-                (est.engine_throttle - lit_thr) / 0.15
+                (est.engine_throttle - lit_thr) / 0.030
             )
         else:
             land_acc_lim = 3.05
@@ -2094,9 +2096,9 @@ class RtlsController3D:
             if fj_cnt > self._prev_fj_count or (
                 fj_cnt > 0
                 and self.fdir.fin_jam_detected_time_s is not None
-                and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.65
+                and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.75
             ):
-                # Keep Roll DOB clean across the 0.65 s 60 deg/s healthy-fin reconfiguration slew
+                # Keep Roll DOB clean across the 0.75 s Fin-Jam runaway & healthy-fin slew
                 # so resolver lag never charges wrong-sign roll bias into post-slew recovery!
                 self.estimator.reset_torque_bias_on_reconfig(
                     upper_attached=est.upper_attached, reset_roll=True

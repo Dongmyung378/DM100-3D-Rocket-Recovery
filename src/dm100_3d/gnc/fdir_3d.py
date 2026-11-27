@@ -97,6 +97,7 @@ class CausalFdir3D:
         self.fin_jammed: list[bool] = [False, False, False, False]
         self.fin_jam_angles_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
+        self._prev_fin_dm_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self.mission_mode: str = "RTLS"
         self.engine_out_detected_time_s: float | None = None
         self.fin_jam_detected_time_s: float | None = None
@@ -286,19 +287,30 @@ class CausalFdir3D:
                 for j in range(4):
                     meas_j = float(pkt.fin_deflection_rad[j])
                     dm_j = max(-max_lead, min(max_lead, meas_j - self._prev_fin_meas_rad[j]))
+                    prev_dm_j = self._prev_fin_dm_rad[j]
                     self._prev_fin_meas_rad[j] = meas_j
+                    self._prev_fin_dm_rad[j] = dm_j
                     if self.fin_jammed[j]:
-                        # Delay-aware causal lead during active runaway (> 12.5 deg/s); once settled
-                        # on stop, low-pass filter meas_j so resolver noise never chatters Roll RCS!
-                        if abs(dm_j) > radians(0.25):
-                            lead_k = 0.70 + 0.85 * self.total_delay_steps
+                        # Delay-aware causal lead ONLY during sustained same-sign active runaway
+                        # (2 consecutive steps > 16 deg/s within 0.60 s of detection) so post-lock
+                        # resolver white noise NEVER triggers fake lead spikes into the QP / RCS!
+                        el_fj = (
+                            pkt.time_s - self.fin_jam_detected_time_s
+                            if self.fin_jam_detected_time_s is not None
+                            else 0.0
+                        )
+                        sustained_runaway = (
+                            el_fj <= 0.60 and abs(dm_j) > radians(0.32) and (dm_j * prev_dm_j) > 0.0
+                        )
+                        if sustained_runaway:
+                            lead_k = min(1.05, 0.55 + 0.50 * self.total_delay_steps)
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + lead_k * dm_j)
                             )
                         else:
                             cur_est = self.fin_jam_angles_rad[j]
                             self.fin_jam_angles_rad[j] = max(
-                                -f_lim, min(f_lim, cur_est + 0.35 * (meas_j - cur_est))
+                                -f_lim, min(f_lim, cur_est + 0.20 * (meas_j - cur_est))
                             )
                         continue
                     slew_step_j = max(
@@ -321,8 +333,8 @@ class CausalFdir3D:
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
                             lead_init = (
-                                (0.85 + 0.85 * self.total_delay_steps) * dm_j
-                                if abs(dm_j) > radians(0.25)
+                                min(1.10, 0.65 + 0.45 * self.total_delay_steps) * dm_j
+                                if abs(dm_j) > radians(0.32)
                                 else 0.0
                             )
                             self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + lead_init))

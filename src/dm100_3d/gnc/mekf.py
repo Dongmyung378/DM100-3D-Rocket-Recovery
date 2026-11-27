@@ -439,14 +439,17 @@ class CausalEstimator3D:
                 # Exact 15x15 Strapdown INS error-state transition Jacobian
                 f_mat = np.eye(15, dtype=np.float64)
                 f_mat[0:3, 3:6] = np.eye(3) * dt
+                a_mag = float(np.linalg.norm(a_b_corr))
                 if not (pkt.on_pad and pkt.upper_attached):
-                    f_mat[3:6, 6:9] = -r_wb @ _skew(a_b_corr) * dt
+                    # Couple velocity->attitude only under meaningful specific force (>= 1.5 m/s^2);
+                    # in zero-g vacuum coast attitude is unobservable from GPS velocity.
+                    if a_mag >= 1.5:
+                        f_mat[3:6, 6:9] = -r_wb @ _skew(a_b_corr) * dt
                     f_mat[3:6, 9:12] = -r_wb * dt
                 f_mat[6:9, 6:9] = np.eye(3) - _skew(om_corr) * dt
                 f_mat[6:9, 12:15] = -np.eye(3) * dt
 
                 # Process noise (with velocity covariance inflation during GPS blackout)
-                a_mag = float(np.linalg.norm(a_b_corr))
                 if not pkt.gps_valid:
                     q_v = (0.08**2 + (0.0012 * a_mag) ** 2) * dt
                 else:
@@ -495,7 +498,7 @@ class CausalEstimator3D:
                                 self._gps_outage_s = 0.0
                                 self._gps_reacq_buf.clear()
                                 self._gps_reacq_start_s = pkt.measurement_time_s
-                                gain_scale = 0.10
+                                gain_scale = 0.015
                             else:
                                 allow_gps_update = False
                     elif self._in_gps_blackout:
@@ -504,8 +507,9 @@ class CausalEstimator3D:
 
                     if self._gps_reacq_start_s is not None:
                         el_r = pkt.measurement_time_s - self._gps_reacq_start_s
-                        if el_r < 3.0:
-                            gain_scale = min(1.0, max(0.10, el_r / 3.0))
+                        if el_r < 4.0:
+                            u_r = max(0.0, el_r / 4.0)
+                            gain_scale = min(1.0, 0.015 + 0.985 * u_r * u_r)
                         else:
                             self._gps_reacq_start_s = None
 
@@ -958,6 +962,12 @@ class CausalEstimator3D:
             if not self._in_gps_blackout:
                 self.p = p_new.copy()
                 self.v = v_new.copy()
+            # Clear stale pre-separation pos/vel <-> attitude/bias cross-covariance across the
+            # discontinuous COM & separation-impulse step so vacuum-coast GPS never corrupts roll!
+            self.P[0:6, 6:15] = 0.0
+            self.P[6:15, 0:6] = 0.0
+            self.P[0:3, 0:3] = np.diag([0.5, 0.5, 0.5])
+            self.P[3:6, 3:6] = np.diag([0.25, 0.25, 0.25])
             self._a_dist_world[:] = 0.0
             if self._csi_omega_filter is not None:
                 self._csi_omega_filter.set_regime(upper_attached=False, bumpless_xy=(0.0, 0.0))
