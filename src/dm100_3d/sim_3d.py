@@ -1053,6 +1053,7 @@ class MuJoCoPlant3D:
                     fin_rate_rad_s=f_rate,
                     fin_tau_s=f_tau,
                     fin_limit_rad=f_lim,
+                    dynamic_pressure_pa=self._last_ft_q_pa,
                 )
             else:
                 self.engine_throttle += (req_thr - self.engine_throttle) * (

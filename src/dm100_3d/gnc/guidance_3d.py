@@ -243,6 +243,7 @@ class RtlsController3D:
         self._td_started_s: float | None = None
         self._prev_eo_count: int = 0
         self._prev_fj_count: int = 0
+        self._mpc_terminal_latched: bool = False
 
     def _nominal_mass(self, est: EstimatedState3D) -> float:
         return (
@@ -820,13 +821,23 @@ class RtlsController3D:
             self.fdir is not None
             and any(self.fdir.fin_jammed)
             and self.fdir.fin_jam_detected_time_s is not None
-            and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.65
+            and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.85
         ):
-            # Suppress Roll DOB during the 0.65 s 60 deg/s healthy-fin reconfiguration slew so
-            # 1-step resolver lag (~2.2 kNm fake residual) cannot wind up wrong-sign roll bias.
+            # Suppress Roll DOB during the 0.85 s Fin-Jam runaway & healthy-fin reconfiguration
+            # slew so transient resolver lag cannot wind up wrong-sign roll bias.
             tb[2] = 0.0
-        # M3 causal asymmetric engine-offset moment feedforward (matches mekf.py tau_model +
-        # causal chamber-pressure spindown residual on recently isolated failed engines)
+        if (
+            self.fdir is not None
+            and any(self.fdir.engine_failed)
+            and self.fdir.engine_out_detected_time_s is not None
+            and (est.time_s - self.fdir.engine_out_detected_time_s) <= 0.40
+        ):
+            # Suppress P/Y DOB during the 0.40 s post-EO turbopump spindown & 3->3_sym swap
+            # so transient asymmetric thrust mismatch cannot charge wrong-sign P/Y bias.
+            tb[0] = 0.0
+            tb[1] = 0.0
+        # M3 causal 3-axis asymmetric engine-offset moment feedforward (matches mekf.py tau_model +
+        # conical gimbal roll coupling + causal chamber-pressure spindown residual)
         if self.fdir is not None and engine_mask_7 is not None and est.engine_throttle >= 1e-3:
             t_asym = 0.5 * (cur_t + fut_t) if throttle_cmd > 1e-3 else cur_t
             full_t_a, _ = compute_engine_thrust_3d(1.0, p_pa_a, self.vehicle)
@@ -835,6 +846,7 @@ class RtlsController3D:
                     engine_mask_7=engine_mask_7,
                     total_thrust_n=t_asym,
                     full_thrust_7_n=full_t_a,
+                    gimbal_rad=est.gimbal_rad,
                 )
                 btau_b = btau_b + np.asarray(asym_ff, dtype=np.float64)
         req_tau = i_vec * des_alpha + gyro_ff - btau_b - tb
@@ -1329,20 +1341,27 @@ class RtlsController3D:
             self._land_mask_7, _ = self.fdir.select_3eng_mask()
 
         # M3 FDIR Engine-Out mid-landing reconfiguration (CDR §3.4: 3->1 if h > h_stop_1 + 80 m,
-        # else hold 2-engine trimmed burn until h <= 250 m before forcing 2->1 touchdown)
+        # else hold 2-engine trimmed burn only until 1-engine stopping margin clears or h <= 350 m)
         if (
             self.fdir is not None
             and (not self.landing_single_engine)
             and self._land_mask_7 is not None
-            and any(self._land_mask_7[i] and self.fdir.engine_failed[i] for i in range(7))
         ):
-            h_stop_1 = vz_down * vz_down / (2.0 * max(a_max_1_net - 1.0, 2.0)) + 60.0
-            if h > h_stop_1 + 80.0 or h <= 250.0:
-                self.landing_single_engine = True
-            else:
-                self._land_mask_7, _ = self.fdir.select_3eng_mask(
-                    current_mask=self._land_mask_7, allow_2eng_trim=True
-                )
+            has_failed_in_mask = any(
+                self._land_mask_7[i] and self.fdir.engine_failed[i] for i in range(7)
+            )
+            in_asym_2eng = sum(1 for v in self._land_mask_7 if v) == 2 and bool(
+                self._land_mask_7[0]
+            )
+            if has_failed_in_mask or in_asym_2eng:
+                h_stop_1 = vz_down * vz_down / (2.0 * max(a_max_1_net - 1.0, 2.0)) + 60.0
+                margin_1 = 60.0 if in_asym_2eng else 80.0
+                if h > h_stop_1 + margin_1 or h <= 350.0:
+                    self.landing_single_engine = True
+                elif has_failed_in_mask:
+                    self._land_mask_7, _ = self.fdir.select_3eng_mask(
+                        current_mask=self._land_mask_7, allow_2eng_trim=True
+                    )
 
         # Monotone 3 -> 1 engine switch + one-shot Clarabel 3D GFOLD SOCP reference plan
         if not self.landing_single_engine and (
@@ -1523,8 +1542,11 @@ class RtlsController3D:
                     est.vel_enu_m_s[1] + a_now_xy[1] * tau_lead_mpc,
                 )
                 # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=30 m)
+                if h_vref <= 40.0:
+                    self._mpc_terminal_latched = True
                 if (
                     h_vref > 40.0
+                    and (not self._mpc_terminal_latched)
                     and est.time_s
                     >= self.online_mpc.last_solve_time_s
                     + self.online_mpc.cfg.replan_period_s
@@ -1539,10 +1561,13 @@ class RtlsController3D:
                         dtype=np.float64,
                     )
                     z_tgt_mpc = 30.0
-                    v_tgt_mpc = sqrt(
-                        v_td * v_td
-                        + 2.0 * a_lo * z_tgt_mpc
-                        + ((a_hi - a_lo) / h_shape) * z_tgt_mpc * z_tgt_mpc
+                    v_tgt_mpc = min(
+                        sqrt(
+                            v_td * v_td
+                            + 2.0 * a_lo * z_tgt_mpc
+                            + ((a_hi - a_lo) / h_shape) * z_tgt_mpc * z_tgt_mpc
+                        ),
+                        max(2.5, vz_down + 1.0),
                     )
                     # Cap MPC planned thrust at smooth 1-engine tracking envelope (~72% max)
                     # so GFOLD avoids cliff-dive bang-bang & leaves ample tracking headroom.
@@ -1810,13 +1835,17 @@ class RtlsController3D:
                 + 1.35 * (float(v_ref[2]) - est.vel_enu_m_s[2])
                 - float(a_cor[2])
             )
-            # Smooth 75%/25% Stage-B vertical-corridor damping (eliminates both hover stall and
-            # late high-speed descent without discontinuous throttle ping-pong).
+            # Monotone Stage-B vertical-corridor guard: identical 75%/25% on nominal flights
+            # (vz_down >= 0.88 * v_stage_b_cap), smoothly ramping Stage-B authority up to 100%
+            # whenever receding-horizon MPC tries to over-brake vertically (eliminates hover-stall).
             u_z_v1 = max(
                 t_min / mass,
                 (az_net + g_loc - b_z - float(a_cor[2])) - float(aero_f[2]) / mass,
             )
-            u_z = 0.75 * u_z_mpc + 0.25 * u_z_v1
+            w_v1 = 0.25 + 0.75 * _smoothstep(
+                (0.88 * v_stage_b_cap - vz_down) / max(0.22 * v_stage_b_cap, 1.0)
+            )
+            u_z = (1.0 - w_v1) * u_z_mpc + w_v1 * u_z_v1
             fz_req = max(t_min * 0.9, mass * u_z)
             max_tilt = radians(2.0) + radians(9.5) * _smoothstep((h_vref - 32.0) / 55.0)
         else:
@@ -2617,6 +2646,11 @@ class RtlsController3D:
                 deploy_fins_gl = h > h_ignite + 240.0
                 gl_acc_lim = 1.45 if self.gnc_v2.use_structural_filter else 2.2
                 gl_acc_guard = 2.0 if self.gnc_v2.use_structural_filter else 2.3
+                if has_fj_gl and (
+                    abs(degrees(roll_angle_rad(est.quat_wxyz))) > 0.8
+                    or abs(degrees(est.omega_body_rad_s[2])) > 1.5
+                ):
+                    gl_acc_guard = max(gl_acc_guard, 3.4)
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,

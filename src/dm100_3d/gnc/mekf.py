@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from math import acos, degrees, exp, hypot, radians, sqrt, tan
+from math import acos, cos, degrees, exp, hypot, radians, sin, sqrt, tan
 
 import numpy as np
 from numpy.typing import NDArray
@@ -882,10 +882,28 @@ class CausalEstimator3D:
         ):
             active_idx = [i for i in range(7) if mask_exec[i]]
             if active_idx:
+                g_lim_m = radians(self.vehicle.propulsion.gimbal_limit_deg)
+                gy_m, gx_m = float(gim_mid[0]), float(gim_mid[1])
+                g_mag_m = hypot(gy_m, gx_m)
+                if g_mag_m > g_lim_m and g_mag_m > 1e-12:
+                    sc_gm = g_lim_m / g_mag_m
+                    gy_m *= sc_gm
+                    gx_m *= sc_gm
+                    g_mag_m = g_lim_m
+                if g_mag_m > 1e-12:
+                    s_gm = sin(g_mag_m) / g_mag_m
+                    ux_m, uy_m, uz_m = gy_m * s_gm, gx_m * s_gm, cos(g_mag_m)
+                else:
+                    ux_m, uy_m, uz_m = 0.0, 0.0, 1.0
                 t_per = ft.thrust_n / len(active_idx)
-                ax_t = sum(ENGINE_NOZZLE_XY_M[i][1] * t_per for i in active_idx)
-                ay_t = sum(-ENGINE_NOZZLE_XY_M[i][0] * t_per for i in active_idx)
-                tau_model = tau_model + np.array([ax_t, ay_t, 0.0], dtype=np.float64)
+                tx_m, ty_m, tz_m = t_per * ux_m, t_per * uy_m, t_per * uz_m
+                ax_t = sum(ENGINE_NOZZLE_XY_M[i][1] * tz_m for i in active_idx)
+                ay_t = sum(-ENGINE_NOZZLE_XY_M[i][0] * tz_m for i in active_idx)
+                az_t = sum(
+                    ENGINE_NOZZLE_XY_M[i][0] * ty_m - ENGINE_NOZZLE_XY_M[i][1] * tx_m
+                    for i in active_idx
+                )
+                tau_model = tau_model + np.array([ax_t, ay_t, az_t], dtype=np.float64)
         if matched_dob and self._csi_dob_torque_filter is not None:
             # Matched DOB (CDR C1): filter model torque with identical H_filt as gyro omega
             tau_model = self._csi_dob_torque_filter.filter_sample(

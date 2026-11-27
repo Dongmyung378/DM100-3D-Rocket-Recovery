@@ -292,9 +292,9 @@ class PriorityControlAllocator3D:
 
             fin_cmd = [float(u_sol[0]), float(u_sol[1]), float(u_sol[2]), float(u_sol[3])]
             fin_tau = t_ref + b_fin @ (u_sol - u_ref)
-            # Smooth slew-midpoint fin torque for Stage-3 RCS: `cur_j` lags the true plant fin by
-            # 1.0*dt (resolver lag), so advance 1.5*dt and smoothly blend [0.25, 0.55] deg into
-            # `u_sol` so RCS engages immediately on jam detection AND ramps off with zero step kick!
+            # Smooth slew-midpoint fin torque for Stage-3 RCS + causal actuator-lag lead
+            # pre-compensation during the first 0.40 s of active Fin-Jam reconfiguration so
+            # healthy fins slew at full rate instead of lagging behind the 0.08 s time constant.
             if inp.current_fin_deflection_rad is not None:
                 f_rate = radians(fins.deflection_rate_deg_s)
                 f_tau_act = fins.actuator_time_constant_s
@@ -311,7 +311,14 @@ class PriorityControlAllocator3D:
                         u_mid[j] = u_sol[j]
                     else:
                         cur_j = float(inp.current_fin_deflection_rad[j])
-                        df_j = float(u_sol[j]) - cur_j
+                        df_lead = float(u_sol[j]) - cur_j
+                        lo_j, hi_j = bounds_4[j]
+                        if el_j <= 0.40 and abs(df_lead) > radians(0.35):
+                            u_cmd_j = max(lo_j, min(hi_j, cur_j + 2.0 * df_lead))
+                            fin_cmd[j] = u_cmd_j
+                        else:
+                            u_cmd_j = float(u_sol[j])
+                        df_j = u_cmd_j - cur_j
                         step_j = max(
                             -f_rate * dt_pred,
                             min(f_rate * dt_pred, df_j * (1.0 - exp(-dt_pred / f_tau_act))),

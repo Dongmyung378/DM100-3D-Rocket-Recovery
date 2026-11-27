@@ -360,3 +360,95 @@ def test_v2_report_statistics_and_6_chart_generation(tmp_path: Path) -> None:
     for ch in rep["charts"]:
         assert Path(ch).exists() and Path(ch).stat().st_size > 5_000
     assert out_json.exists() and out_md.exists()
+
+
+def test_causal_asymmetric_gimbal_roll_ff_matches_cluster_physics() -> None:
+    """3-axis causal asymmetric thrust-offset FF must match 6-engine gimbal roll coupling."""
+    from math import radians
+
+    from dm100_3d.config import DM100VehicleConfig
+    from dm100_3d.gnc.fdir_3d import CausalFdir3D
+    from dm100_3d.physics.faults_3d import EngineClusterFaultModel3D, FaultSettings3D
+
+    veh = DM100VehicleConfig()
+    fdir = CausalFdir3D(vehicle=veh)
+    fdir.engine_failed[1] = True
+    mask_6 = fdir.healthy_ascent_mask()
+    gim = (radians(2.5), radians(-3.2))
+
+    cluster = EngineClusterFaultModel3D(
+        seed=42,
+        vehicle=veh,
+        settings=FaultSettings3D(
+            engine_out_index=1,
+            engine_out_time_s=0.0,
+            side_load_peak_n=0.0,
+        ),
+    )
+    cluster.engine_failed[1] = True
+    cluster.engine_throttles[:] = [1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    cl_out = cluster.step_cluster(
+        time_s=50.0,
+        dt_s=0.01,
+        phase="ascent",
+        req_total_throttle=6.0 / 7.0,
+        active_engines=6,
+        engine_mask_7=mask_6,
+        engine_throttles_cmd_7=None,
+        engine_tau_s=0.04,
+        ambient_pressure_pa=10_000.0,
+        cg_station_m=10.5,
+        gimbal_rad=gim,
+        thrust_scale=1.0,
+        delivered_ratio=1.0,
+        main_prop_kg=30_000.0,
+        touchdown_detected=False,
+    )
+    ff = fdir.causal_asymmetric_torque_ff_nm(
+        engine_mask_7=mask_6,
+        total_thrust_n=cl_out.total_thrust_n,
+        full_thrust_7_n=0.0,
+        gimbal_rad=gim,
+    )
+    assert abs(cl_out.asymmetric_torque_body_nm[2]) > 5_000.0
+    np.testing.assert_allclose(ff, cl_out.asymmetric_torque_body_nm, rtol=1e-6, atol=1e-3)
+
+
+def test_fin_jam_aero_hinge_load_derating() -> None:
+    """High supersonic dynamic pressure physically derates hydraulic fin-jam runaway rate."""
+    from math import radians
+
+    from dm100_3d.config import DM100VehicleConfig
+    from dm100_3d.physics.faults_3d import EngineClusterFaultModel3D, FaultSettings3D
+
+    veh = DM100VehicleConfig()
+    s = FaultSettings3D(fin_jam_index=0, fin_jam_time_s=0.0, fin_jam_angle_deg=-10.0)
+    cl_vac = EngineClusterFaultModel3D(seed=42, vehicle=veh, settings=s)
+    cl_hiq = EngineClusterFaultModel3D(seed=42, vehicle=veh, settings=s)
+    f_rate = radians(60.0)
+    f_lim = radians(20.0)
+    d_vac = cl_vac.apply_fin_jam_dynamics(
+        time_s=0.0,
+        dt_s=0.02,
+        phase="aero_glide",
+        fin_deflection=[0.0, 0.0, 0.0, 0.0],
+        cmd_fin_deflection_rad=(0.0, 0.0, 0.0, 0.0),
+        fin_rate_rad_s=f_rate,
+        fin_tau_s=0.08,
+        fin_limit_rad=f_lim,
+        dynamic_pressure_pa=0.0,
+    )
+    d_hiq = cl_hiq.apply_fin_jam_dynamics(
+        time_s=0.0,
+        dt_s=0.02,
+        phase="aero_glide",
+        fin_deflection=[0.0, 0.0, 0.0, 0.0],
+        cmd_fin_deflection_rad=(0.0, 0.0, 0.0, 0.0),
+        fin_rate_rad_s=f_rate,
+        fin_tau_s=0.08,
+        fin_limit_rad=f_lim,
+        dynamic_pressure_pa=25_500.0,
+    )
+    assert np.isclose(d_vac[0], -radians(1.2), atol=1e-9)
+    assert np.isclose(d_hiq[0], -radians(0.3), atol=1e-9)
+    assert abs(d_hiq[0]) < 0.30 * abs(d_vac[0])

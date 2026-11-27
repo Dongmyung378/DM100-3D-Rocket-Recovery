@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from math import exp, radians
+from math import cos, exp, hypot, radians, sin
 
 import numpy as np
 
@@ -288,16 +288,17 @@ class CausalFdir3D:
                     dm_j = max(-max_lead, min(max_lead, meas_j - self._prev_fin_meas_rad[j]))
                     self._prev_fin_meas_rad[j] = meas_j
                     if self.fin_jammed[j]:
-                        # Damped causal lead ONLY during active runaway (> 22.5 deg/s); once settled
+                        # Delay-aware causal lead during active runaway (> 12.5 deg/s); once settled
                         # on stop, low-pass filter meas_j so resolver noise never chatters Roll RCS!
-                        if abs(dm_j) > radians(0.45):
+                        if abs(dm_j) > radians(0.25):
+                            lead_k = 0.70 + 0.85 * self.total_delay_steps
                             self.fin_jam_angles_rad[j] = max(
-                                -f_lim, min(f_lim, meas_j + 0.45 * dm_j)
+                                -f_lim, min(f_lim, meas_j + lead_k * dm_j)
                             )
                         else:
                             cur_est = self.fin_jam_angles_rad[j]
                             self.fin_jam_angles_rad[j] = max(
-                                -f_lim, min(f_lim, cur_est + 0.25 * (meas_j - cur_est))
+                                -f_lim, min(f_lim, cur_est + 0.35 * (meas_j - cur_est))
                             )
                         continue
                     slew_step_j = max(
@@ -319,7 +320,11 @@ class CausalFdir3D:
                         self._fin_err_count[j] += 1
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
-                            lead_init = 0.85 * dm_j if abs(dm_j) > radians(0.40) else 0.0
+                            lead_init = (
+                                (0.85 + 0.85 * self.total_delay_steps) * dm_j
+                                if abs(dm_j) > radians(0.25)
+                                else 0.0
+                            )
                             self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + lead_init))
                             if self.fin_jam_detected_time_s is None:
                                 self.fin_jam_detected_time_s = pkt.time_s
@@ -415,32 +420,52 @@ class CausalFdir3D:
         engine_mask_7: tuple[bool, ...],
         total_thrust_n: float,
         full_thrust_7_n: float = 0.0,
+        gimbal_rad: tuple[float, float] = (0.0, 0.0),
     ) -> tuple[float, float, float]:
-        """Causal asymmetric thrust-offset torque `(tx, ty, 0)` from active mask + EO spindown.
+        """Causal 3-axis asymmetric thrust-offset torque `(tx, ty, tz)` from active mask + spindown.
 
-        Includes strictly causal residual chamber-pressure spindown thrust on failed engines
-        (`_last_chamber_p_7[i] > 0.02`) so TVC cancels slow turbopump spindown moments cleanly.
+        Includes strictly causal conical gimbal roll coupling (`nx*Ty - ny*Tx`) and residual
+        chamber-pressure spindown thrust on failed engines (`_last_chamber_p_7[i] > 0.02`) so TVC
+        and Roll RCS cancel asymmetric moments on all 3 axes with zero lag.
         """
         if total_thrust_n <= 1.0 and full_thrust_7_n <= 1.0:
             return (0.0, 0.0, 0.0)
+        g_lim = radians(self.vehicle.propulsion.gimbal_limit_deg)
+        gy, gx = float(gimbal_rad[0]), float(gimbal_rad[1])
+        g_mag = hypot(gy, gx)
+        if g_mag > g_lim and g_mag > 1e-12:
+            sc_g = g_lim / g_mag
+            gy *= sc_g
+            gx *= sc_g
+            g_mag = g_lim
+        if g_mag > 1e-12:
+            s_g = sin(g_mag) / g_mag
+            ux, uy, uz = gy * s_g, gx * s_g, cos(g_mag)
+        else:
+            ux, uy, uz = 0.0, 0.0, 1.0
+
         active_idx = [i for i in range(7) if engine_mask_7[i] and not self.engine_failed[i]]
         tau_x = 0.0
         tau_y = 0.0
+        tau_z = 0.0
         if active_idx and total_thrust_n > 1.0:
             t_per = total_thrust_n / len(active_idx)
+            tx_i, ty_i, tz_i = t_per * ux, t_per * uy, t_per * uz
             for i in active_idx:
                 nx_i, ny_i = ENGINE_NOZZLE_XY_M[i]
-                tau_x += ny_i * t_per
-                tau_y += -nx_i * t_per
+                tau_x += ny_i * tz_i
+                tau_y += -nx_i * tz_i
+                tau_z += nx_i * ty_i - ny_i * tx_i
         if full_thrust_7_n > 1.0:
             t_one_full = full_thrust_7_n / 7.0
             for i in range(7):
                 if self.engine_failed[i] and float(self._last_chamber_p_7[i]) > 0.02:
                     t_res = float(self._last_chamber_p_7[i]) * t_one_full
                     nx_i, ny_i = ENGINE_NOZZLE_XY_M[i]
-                    tau_x += ny_i * t_res
-                    tau_y += -nx_i * t_res
-        return (tau_x, tau_y, 0.0)
+                    tau_x += ny_i * (t_res * uz)
+                    tau_y += -nx_i * (t_res * uz)
+                    tau_z += nx_i * (t_res * uy) - ny_i * (t_res * ux)
+        return (tau_x, tau_y, tau_z)
 
     def status(self) -> FdirStatus3D:
         has_eo = any(self.engine_failed)
