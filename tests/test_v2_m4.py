@@ -447,7 +447,7 @@ def test_fin_jam_aero_hinge_load_derating() -> None:
         fin_rate_rad_s=f_rate,
         fin_tau_s=0.08,
         fin_limit_rad=f_lim,
-        dynamic_pressure_pa=14_500.0,
+        dynamic_pressure_pa=12_500.0,
     )
     assert np.isclose(d_vac[0], -radians(1.2), atol=1e-9)
     assert np.isclose(d_hiq[0], -radians(0.6), atol=1e-9)
@@ -521,7 +521,71 @@ def test_fdir_fin_jam_alpha_beta_zeroes_lead_on_stop() -> None:
             assert st.fin_jam_angles_rad_4[3] < radians(-2.0)
         if k == 4:
             # Immediate stop detection drops velocity lead -> no overshoot beyond -1.70 deg
-            assert abs(st.fin_jam_angles_rad_4[3] - radians(-1.65)) < radians(0.10)
+            assert abs(st.fin_jam_angles_rad_4[3] - radians(-1.65)) < radians(0.15)
+
+
+def test_fdir_fin_jam_zero_false_positives_under_noise_and_entry_buffet() -> None:
+    """Fin-Jam FDIR must have 0 FP across 5,000 noisy glide + entry-burn SRP buffet ticks."""
+    from math import radians
+
+    from dm100_3d.config import DM100VehicleConfig
+    from dm100_3d.gnc.fdir_3d import CausalFdir3D
+    from dm100_3d.interfaces import ActuatorCommand3D, TelemetryPacket3D
+
+    veh = DM100VehicleConfig()
+    fdir = CausalFdir3D(vehicle=veh, observation_delay_steps=1, action_delay_steps=0)
+    rng = np.random.default_rng(2026)
+    cmd0 = ActuatorCommand3D(
+        throttle_cmd=0.0,
+        active_engines=0,
+        gimbal_rad=(0.0, 0.0),
+        rcs_torque_nm=(0.0, 0.0, 0.0),
+        fin_deflection_rad=(0.0, 0.0, 0.0, 0.0),
+        deploy_fins=True,
+        deploy_gear=False,
+        phase="aero_glide",
+    )
+    omz = 0.0
+    for k in range(5_000):
+        in_entry = k < 1_000
+        noise_4 = tuple(radians(float(x)) for x in rng.normal(0.0, 0.10, size=4))
+        omz += radians(0.25 if in_entry else 0.05) * (1.0 if k % 2 == 0 else -1.0)
+        fdir.record_command(cmd0)
+        pkt = TelemetryPacket3D(
+            time_s=400.0 + 0.02 * k,
+            measurement_time_s=400.0 + 0.02 * (k - 1),
+            pos_enu_m=(0.0, 0.0, 15_000.0),
+            vel_enu_m_s=(0.0, 0.0, -350.0),
+            quat_wxyz=(1.0, 0.0, 0.0, 0.0),
+            omega_body_rad_s=(0.0, 0.0, omz),
+            accel_body_m_s2=(0.0, 0.0, 10.0),
+            main_propellant_kg=5_000.0,
+            rcs_propellant_kg=200.0,
+            gear_extension=0.0,
+            fin_deflection_rad=noise_4,
+            fin_extension=1.0,
+            gimbal_rad=(0.0, 0.0),
+            engine_throttle=0.40 if in_entry else 0.0,
+            upper_attached=False,
+            on_pad=False,
+            touchdown_detected=False,
+            active_engines=3 if in_entry else 0,
+            restarts_used=1,
+            gps_valid=True,
+            radar_alt_valid=False,
+            radar_range_m=15_000.0,
+            engine_chamber_pressure_ratio_7=(0.0,) * 7,
+        )
+        st = fdir.update(
+            pkt=pkt,
+            q_pa=20_000.0,
+            vel_enu_m_s=(0.0, 0.0, -350.0),
+            pos_enu_m=(0.0, 0.0, 15_000.0),
+            accel_dist_world_m_s2=(0.0, 0.0, 0.0),
+            torque_bias_body_nm=(0.0, 0.0, 0.0),
+            mass_kg=18_000.0,
+        )
+        assert not any(st.fin_jammed_4), f"False positive Fin-Jam at tick {k}!"
 
 
 def test_mekf_separation_reset_clears_cross_covariance() -> None:

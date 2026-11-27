@@ -2636,7 +2636,7 @@ class RtlsController3D:
                 has_fj_gl = self.fdir is not None and any(self.fdir.fin_jammed)
                 if has_fj_gl and self.fdir is not None and q_pa >= 400.0:
                     hi_q_w = _smoothstep((q_pa - 8_000.0) / 8_000.0)
-                    body_lim_deg = 9.5 - 5.0 * hi_q_w
+                    body_lim_deg = 9.0 - 6.5 * hi_q_w
                     corridor_half_deg = 15.0 - 3.5 * hi_q_w
                     for j in range(4):
                         if self.fdir.fin_jammed[j]:
@@ -2649,7 +2649,7 @@ class RtlsController3D:
                                 mid_c = max(-body_lim_deg, min(body_lim_deg, d_jam_deg))
                                 lo_c, hi_c = mid_c, mid_c
                             raw_a_xy[ax_j] = max(lo_c, min(hi_c, float(raw_a_xy[ax_j])))
-                    fj_cap = 11.0 - 4.5 * hi_q_w
+                    fj_cap = 10.0 - 7.0 * hi_q_w
                     a_fj_nrm = float(np.linalg.norm(raw_a_xy))
                     if a_fj_nrm > fj_cap and a_fj_nrm > 1e-9:
                         raw_a_xy *= fj_cap / a_fj_nrm
@@ -2657,7 +2657,7 @@ class RtlsController3D:
                     raw_a_xy[:] = 0.0
 
                 tau_gl_a = (
-                    1.10 if has_fj_gl else (0.50 if self.gnc_v2.use_structural_filter else 0.35)
+                    0.65 if has_fj_gl else (0.50 if self.gnc_v2.use_structural_filter else 0.35)
                 )
                 self._glide_alpha_xy_deg += (1.0 - exp(-s.control_dt_s / tau_gl_a)) * (
                     raw_a_xy - self._glide_alpha_xy_deg
@@ -2680,7 +2680,7 @@ class RtlsController3D:
                     abs(degrees(roll_angle_rad(est.quat_wxyz))) > 0.8
                     or abs(degrees(est.omega_body_rad_s[2])) > 1.5
                 ):
-                    gl_acc_guard = max(gl_acc_guard, 2.6)
+                    gl_acc_guard = max(gl_acc_guard, 2.3)
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
