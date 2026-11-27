@@ -36,9 +36,9 @@ class MpcGfold3DConfig:
     n_steps: int = 12
     replan_period_s: float = 0.50
     lead_time_s: float = 0.02
-    max_tilt_deg: float = 11.0
+    max_tilt_deg: float = 11.5
     final_tilt_deg: float = 1.5
-    vertical_align_alt_m: float = 48.0
+    vertical_align_alt_m: float = 50.0
     glide_slope_max_deg: float = 65.0
     pad_margin_m: float = 2.0
     lossless_min_ratio: float = 0.98
@@ -48,8 +48,8 @@ class MpcGfold3DConfig:
     slack_xy_weight: float = 2_000.0
     slack_vxy_weight: float = 4_000.0
     sigma_lin_weight: float = 1.0
-    sigma_quad_weight: float = 0.50
-    lat_control_weight: float = 0.015
+    sigma_quad_weight: float = 2.50
+    lat_control_weight: float = 0.15
     control_reg_weight: float = 1e-7
 
 

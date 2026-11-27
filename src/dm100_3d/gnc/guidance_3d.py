@@ -241,6 +241,7 @@ class RtlsController3D:
         self._land_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
         self._td_started_s: float | None = None
         self._prev_eo_count: int = 0
+        self._prev_fj_count: int = 0
 
     def _nominal_mass(self, est: EstimatedState3D) -> float:
         return (
@@ -813,6 +814,15 @@ class RtlsController3D:
         if not use_xy_torque_bias:
             tb[0] = 0.0
             tb[1] = 0.0
+        if (
+            self.fdir is not None
+            and any(self.fdir.fin_jammed)
+            and self.fdir.fin_jam_detected_time_s is not None
+            and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.65
+        ):
+            # Suppress Roll DOB during the 0.65 s 60 deg/s healthy-fin reconfiguration slew so
+            # 1-step resolver lag (~2.2 kNm fake residual) cannot wind up wrong-sign roll bias.
+            tb[2] = 0.0
         # M3 causal asymmetric engine-offset moment feedforward (matches mekf.py tau_model +
         # causal chamber-pressure spindown residual on recently isolated failed engines)
         if self.fdir is not None and engine_mask_7 is not None and est.engine_throttle >= 1e-3:
@@ -1473,8 +1483,10 @@ class RtlsController3D:
             az_net = max(-3.5, min(a_max_1_net, az_net))
             a_t_sm = max(t_min / mass, min(t_max / mass, a_ff + g_loc - float(aero_f[2]) / mass))
 
-            # Zero-tilt unwinding lead state (used by Online GFOLD MPC to cancel 2.5 s CSI
-            # attitude-unwinding phase lag and eliminate lateral limit cycles!)
+            # Causal sign-monotone 1st-order attitude-lag lead state for Online GFOLD MPC:
+            # projects actual current net horizontal acceleration (thrust tilt + aero + bias + Cor)
+            # over the CSI attitude loop lead horizon without `th_tr` false-reversal bias under
+            # strong opposing wind shear.
             p_lead_mpc = (est.pos_enu_m[0], est.pos_enu_m[1])
             v_lead_mpc = (est.vel_enu_m_s[0], est.vel_enu_m_s[1])
             if (
@@ -1483,46 +1495,34 @@ class RtlsController3D:
                 and (not is_abort)
                 and h_vref > 12.0
             ):
-                # Match CSI-certified softer booster unwinding dynamics (kp=0.55, kd=1.65) so MPC
-                # starts unwinding early enough to eliminate shear/gust overshoot!
-                a_att_m = (
-                    radians(1.40)
-                    if self.gnc_v2.use_structural_filter
-                    else radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+                tau_lead_mpc = (0.95 if self.gnc_v2.use_structural_filter else 0.55) * min(
+                    1.0, max(0.35, (h_vref - 25.0) / 80.0)
                 )
-                denom_gtm = max(lever_trim * mass * a_t_sm, 1.0)
-                lim_gtm = 0.85 * sin(max_gim_rad)
-                gt_xm = asin(max(-lim_gtm, min(lim_gtm, float(tau_aero_b_now[1]) / denom_gtm)))
-                gt_ym = asin(max(-lim_gtm, min(lim_gtm, -float(tau_aero_b_now[0]) / denom_gtm)))
-                th_tr_m = np.clip(
-                    (-aero_f[0:2] / mass - self._land_bxy_smooth - a_cor[0:2]) / max(a_t_sm, 5.0),
-                    -0.25,
-                    0.25,
+                a_now_xy = (
+                    a_t_sm * sin(tilt_x)
+                    + float(aero_f[0]) / mass
+                    + float(self._land_bxy_smooth[0])
+                    + float(a_cor[0]),
+                    a_t_sm * sin(tilt_y)
+                    + float(aero_f[1]) / mass
+                    + float(self._land_bxy_smooth[1])
+                    + float(a_cor[1]),
                 )
-                tx_rm = tilt_x - float(th_tr_m[0])
-                ty_rm = tilt_y - float(th_tr_m[1])
-                tx_rm_eff = (
-                    (0.0 if (tx_rm + 0.80 * gt_xm) * tx_rm < 0.0 else tx_rm + 0.80 * gt_xm)
-                    if tx_rm * gt_xm < 0.0
-                    else tx_rm
+                p_lead_mpc = (
+                    est.pos_enu_m[0]
+                    + est.vel_enu_m_s[0] * tau_lead_mpc
+                    + 0.5 * a_now_xy[0] * (tau_lead_mpc * tau_lead_mpc),
+                    est.pos_enu_m[1]
+                    + est.vel_enu_m_s[1] * tau_lead_mpc
+                    + 0.5 * a_now_xy[1] * (tau_lead_mpc * tau_lead_mpc),
                 )
-                ty_rm_eff = (
-                    (0.0 if (ty_rm + 0.80 * gt_ym) * ty_rm < 0.0 else ty_rm + 0.80 * gt_ym)
-                    if ty_rm * gt_ym < 0.0
-                    else ty_rm
-                )
-                p_lead_mpc, v_lead_mpc = predict_zero_tilt_state_3d(
-                    (est.pos_enu_m[0], est.pos_enu_m[1]),
-                    (est.vel_enu_m_s[0], est.vel_enu_m_s[1]),
-                    (tx_rm_eff, ty_rm_eff),
-                    (rate_tx, rate_ty),
-                    a_t_sm,
-                    a_att_m,
-                    x_horizon_cap_s=(3.0 if self.gnc_v2.use_structural_filter else 2.4),
+                v_lead_mpc = (
+                    est.vel_enu_m_s[0] + a_now_xy[0] * tau_lead_mpc,
+                    est.vel_enu_m_s[1] + a_now_xy[1] * tau_lead_mpc,
                 )
                 # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=30 m)
                 if (
-                    h_vref > 42.0
+                    h_vref > 40.0
                     and est.time_s
                     >= self.online_mpc.last_solve_time_s
                     + self.online_mpc.cfg.replan_period_s
@@ -1796,25 +1796,27 @@ class RtlsController3D:
         # Assemble required 3D thrust vector (2 Hz GFOLD MPC upstream of v1 gimbal-trim decoupler)
         if mpc_ref is not None and (not vertical_body):
             p_ref, v_ref, a_ref = mpc_ref
-            # Track zero-tilt lead state + exact 50 Hz crosswind/bias decoupling (zero wind drift!)
+            # Track attitude-lead state + exact 50 Hz crosswind/bias decoupling (zero wind drift!)
             p_err_xy = p_ref[0:2] - np.array([p_lead_mpc[0], p_lead_mpc[1]], dtype=np.float64)
             v_err_xy = v_ref[0:2] - np.array([v_lead_mpc[0], v_lead_mpc[1]], dtype=np.float64)
-            a_xy_mpc = a_ref[0:2] + 0.30 * p_err_xy + 1.05 * v_err_xy
+            a_xy_mpc = a_ref[0:2] + 0.35 * p_err_xy + 1.15 * v_err_xy
             prop_xy_mpc = a_xy_mpc - self._land_bxy_smooth - a_cor[0:2]
             f_xy_req = mass * prop_xy_mpc - aero_f[0:2]
-            u_z = (
+            u_z_mpc = (
                 float(a_ref[2])
                 + 0.45 * (float(p_ref[2]) - h_vref)
                 + 1.35 * (float(v_ref[2]) - est.vel_enu_m_s[2])
                 - float(a_cor[2])
             )
-            # Anti-hover-stall guard: prevent MPC from slamming vertical thrust when already
-            # descending slower than the smooth v1 Stage-B profile (eliminates h=58 m stall).
-            if vz_down < 0.92 * v_stage_b_cap:
-                u_z_v1 = (az_net + g_loc - b_z - float(a_cor[2])) - float(aero_f[2]) / mass
-                u_z = min(u_z, max(t_min / mass, u_z_v1 + 0.50))
+            # Smooth 75%/25% Stage-B vertical-corridor damping (eliminates both hover stall and
+            # late high-speed descent without discontinuous throttle ping-pong).
+            u_z_v1 = max(
+                t_min / mass,
+                (az_net + g_loc - b_z - float(a_cor[2])) - float(aero_f[2]) / mass,
+            )
+            u_z = 0.75 * u_z_mpc + 0.25 * u_z_v1
             fz_req = max(t_min * 0.9, mass * u_z)
-            max_tilt = radians(2.0) + radians(9.0) * _smoothstep((h_vref - 32.0) / 55.0)
+            max_tilt = radians(2.0) + radians(9.5) * _smoothstep((h_vref - 32.0) / 55.0)
         else:
             prop_xy = a_xy_cmd - self._land_bxy_smooth - a_cor[0:2]
             if self.landing_single_engine and vz_down <= 0.78 * v_td:
@@ -2057,6 +2059,26 @@ class RtlsController3D:
                 self.estimator.reset_torque_bias_on_reconfig(upper_attached=est.upper_attached)
                 est = replace(est, torque_bias_body_nm=(0.0, 0.0, est.torque_bias_body_nm[2]))
                 self._prev_eo_count = eo_cnt
+            fj_cnt = sum(1 for f in self.fdir.fin_jammed if f)
+            if fj_cnt > self._prev_fj_count or (
+                fj_cnt > 0
+                and self.fdir.fin_jam_detected_time_s is not None
+                and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.65
+            ):
+                # Keep Roll DOB clean across the 0.65 s 60 deg/s healthy-fin reconfiguration slew
+                # so resolver lag never charges wrong-sign roll bias into post-slew recovery!
+                self.estimator.reset_torque_bias_on_reconfig(
+                    upper_attached=est.upper_attached, reset_roll=True
+                )
+                est = replace(
+                    est,
+                    torque_bias_body_nm=(
+                        est.torque_bias_body_nm[0],
+                        est.torque_bias_body_nm[1],
+                        0.0,
+                    ),
+                )
+                self._prev_fj_count = fj_cnt
 
         def _finish(cmd_out: ActuatorCommand3D) -> ActuatorCommand3D:
             self.estimator.record_command(est.time_s, cmd_out)
@@ -2510,9 +2532,10 @@ class RtlsController3D:
                 hi_z_cap = 6.0 + (s.glide_max_alpha_deg - 6.0) * (
                     1.0 - _smoothstep((est.pos_enu_m[2] - 19_000.0) / 8_000.0)
                 )
+                q_drop = 9.0 if self.gnc_v2.use_structural_filter else 7.5
                 q_cap = min(
                     hi_z_cap,
-                    s.glide_max_alpha_deg - 7.5 * _smoothstep((q_pa - 3_500.0) / 6_500.0),
+                    s.glide_max_alpha_deg - q_drop * _smoothstep((q_pa - 3_500.0) / 6_500.0),
                 )
                 max_a = q_cap * pre_taper
 
@@ -2565,7 +2588,9 @@ class RtlsController3D:
                 if est.engine_throttle > 0.01:
                     raw_a_xy[:] = 0.0
 
-                tau_gl_a = 1.10 if has_fj_gl else 0.35
+                tau_gl_a = (
+                    1.10 if has_fj_gl else (0.50 if self.gnc_v2.use_structural_filter else 0.35)
+                )
                 self._glide_alpha_xy_deg += (1.0 - exp(-s.control_dt_s / tau_gl_a)) * (
                     raw_a_xy - self._glide_alpha_xy_deg
                 )

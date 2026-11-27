@@ -298,7 +298,7 @@ class PriorityControlAllocator3D:
             if inp.current_fin_deflection_rad is not None:
                 f_rate = radians(fins.deflection_rate_deg_s)
                 f_tau_act = fins.actuator_time_constant_s
-                dt_pred = 2.0 * inp.control_dt_s
+                dt_pred = 1.5 * inp.control_dt_s
                 # Tight slew ramp during first 0.65 s of jam recovery for smooth RCS handoff,
                 # then smoothly widen to [0.75, 1.45] deg so steady resolver noise never chatters.
                 el_j = inp.fin_jam_elapsed_s if inp.fin_jam_elapsed_s is not None else 0.0
@@ -518,7 +518,10 @@ class PriorityControlAllocator3D:
             if tot_acc_norm > guard_rad_s2 and tot_acc_norm > 1e-12:
                 des_tot = tot_acc * (guard_rad_s2 / tot_acc_norm) * i_vec
                 rcs_scaled = des_tot - (bg + fin_tau_for_rcs + eff_tvc)
-                for ax_i in range(3):
+                # Under Fin-Jam pitch/yaw RCS saturation, never scale down roll RCS when the
+                # roll axis itself is already safely inside the guard!
+                max_ax = 2 if (has_jam and abs(float(tot_acc[2])) <= guard_rad_s2) else 3
+                for ax_i in range(max_ax):
                     rcs_cmd[ax_i] = max(-lims[ax_i], min(lims[ax_i], float(rcs_scaled[ax_i])))
             _ = axis_guard
 
