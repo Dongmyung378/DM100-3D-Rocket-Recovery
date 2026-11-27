@@ -2685,7 +2685,7 @@ class RtlsController3D:
                         if (self.fdir is not None and self.fdir.fin_jam_detected_time_s is not None)
                         else 0.0
                     )
-                    gl_acc_guard = max(gl_acc_guard, 2.9 if el_fj_gl > 0.70 else 2.3)
+                    gl_acc_guard = max(gl_acc_guard, 2.9 if el_fj_gl > 1.00 else 2.25)
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
