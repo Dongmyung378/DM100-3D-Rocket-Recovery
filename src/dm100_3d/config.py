@@ -429,6 +429,21 @@ class GncV2Config:
     ground_effect_nominal_coeff: float = 0.06
     dual_tank_geometry: DualTankGeometry = field(default_factory=DualTankGeometry)
 
+    def any_enabled(self) -> bool:
+        """Return True if any GNC v2 feature is enabled."""
+        return any(
+            (
+                self.use_wgs84_gravity,
+                self.use_dual_tank_mass_props,
+                self.use_srp_iip_feedforward,
+                self.use_ground_effect_feedforward,
+                self.use_structural_filter,
+                self.use_strapdown_mekf,
+                self.use_online_mpc,
+                self.use_fdir_v2,
+            )
+        )
+
     @classmethod
     def m1_preset(cls) -> GncV2Config:
         """Enable causal M1 physics models inside GNC/MEKF."""

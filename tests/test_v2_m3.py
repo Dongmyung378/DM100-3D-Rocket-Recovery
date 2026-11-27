@@ -6,7 +6,7 @@ from math import atan2, degrees, isclose, pi, radians, sqrt
 
 import numpy as np
 
-from dm100_3d.config import DM100VehicleConfig
+from dm100_3d.config import DM100VehicleConfig, GncV2Config, PhysicsV2Config
 from dm100_3d.gnc.allocation_3d import Allocation3DInput, PriorityControlAllocator3D
 from dm100_3d.gnc.fdir_3d import CausalFdir3D
 from dm100_3d.gnc.mpc_gfold_3d import MpcGfold3DConfig, OnlineGfoldMpc3D
@@ -18,6 +18,7 @@ from dm100_3d.physics.faults_3d import (
     EngineClusterFaultModel3D,
     FaultSettings3D,
 )
+from dm100_3d.sim_3d import Scenario3D, SimConfig3D, run_flight_3d
 from dm100_3d.validation_suites import build_edge_v2_suite, get_validation_suite
 
 # ---------------------------------------------------------------------------
@@ -520,3 +521,24 @@ def test_edge_v2_suite_has_48_unique_cases_with_eo_and_fin_jam() -> None:
     assert len(eo_cases) == 4
     assert len(fj_cases) == 4
     assert any(s.expected_mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT" for s in eo_cases)
+
+
+def test_run_flight_3d_full_v2_summary_smoke() -> None:
+    """Fast 0.1 s end-to-end smoke check verifying run_flight_3d + summary + M3 metrics."""
+    assert not GncV2Config().any_enabled()
+    assert GncV2Config.full_v2().any_enabled()
+    summary, _ = run_flight_3d(
+        Scenario3D(name="m3-smoke", seed=1),
+        sim_config=SimConfig3D(
+            deadline_s=0.10,
+            record_replay=False,
+            seed=1,
+            sensor_seed=2,
+            physics_v2=PhysicsV2Config.full_v2(),
+            gnc_v2=GncV2Config.full_v2(),
+        ),
+    )
+    assert "mpc_metrics" in summary
+    assert "fdir_metrics" in summary
+    assert summary["mission_mode"] == "RTLS"
+    assert summary["fdir_state"] == "NOMINAL"
