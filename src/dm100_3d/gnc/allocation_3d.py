@@ -302,7 +302,7 @@ class PriorityControlAllocator3D:
                 # Tight slew ramp during first 0.65 s of jam recovery for smooth RCS handoff,
                 # then smoothly widen to [0.75, 1.45] deg so steady resolver noise never chatters.
                 el_j = inp.fin_jam_elapsed_s if inp.fin_jam_elapsed_s is not None else 0.0
-                w_el = max(0.0, min(1.0, (el_j - 0.65) / 0.60))
+                w_el = max(0.0, min(1.0, (el_j - 0.85) / 0.60))
                 gate_lo = radians(0.15 + 0.60 * w_el)
                 gate_hi = radians(0.45 + 1.00 * w_el)
                 u_mid = np.zeros(4, dtype=np.float64)
@@ -313,9 +313,9 @@ class PriorityControlAllocator3D:
                         cur_j = float(inp.current_fin_deflection_rad[j])
                         df_lead = float(u_sol[j]) - cur_j
                         lo_j, hi_j = bounds_4[j]
-                        if el_j <= 0.56 and abs(df_lead) > radians(0.30):
-                            lead_taper = max(0.0, min(1.0, (0.56 - el_j) / 0.16))
-                            lead_gain = 1.0 + 0.70 * lead_taper
+                        if el_j <= 0.85 and abs(df_lead) > radians(0.30):
+                            lead_taper = max(0.0, min(1.0, (0.85 - el_j) / 0.20))
+                            lead_gain = 1.0 + 0.35 * lead_taper
                             u_cmd_j = max(lo_j, min(hi_j, cur_j + lead_gain * df_lead))
                             fin_cmd[j] = u_cmd_j
                         else:

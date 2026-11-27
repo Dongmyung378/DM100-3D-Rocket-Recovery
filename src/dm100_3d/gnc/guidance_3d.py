@@ -821,9 +821,9 @@ class RtlsController3D:
             self.fdir is not None
             and any(self.fdir.fin_jammed)
             and self.fdir.fin_jam_detected_time_s is not None
-            and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.75
+            and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 1.05
         ):
-            # Suppress Roll DOB during the 0.75 s Fin-Jam runaway & healthy-fin reconfiguration
+            # Suppress Roll DOB during the 1.05 s Fin-Jam runaway & healthy-fin reconfiguration
             # slew so transient resolver lag cannot wind up wrong-sign roll bias.
             tb[2] = 0.0
         if (
@@ -1516,12 +1516,12 @@ class RtlsController3D:
                 and (not is_abort)
                 and h_vref > 12.0
             ):
-                tau_lead_mpc = (2.15 if self.gnc_v2.use_structural_filter else 0.55) * min(
+                tau_lead_mpc = (2.35 if self.gnc_v2.use_structural_filter else 0.55) * min(
                     1.0, max(0.65, (h_vref - 20.0) / 60.0)
                 )
                 # Include mid-horizon angular-rate projection (capped +/-20 deg) so CSI attitude
                 # inertia during large landing-burn EO / blackout diverts unwinds without overshoot.
-                dt_mid = min(0.70, 0.40 * tau_lead_mpc)
+                dt_mid = min(0.75, 0.40 * tau_lead_mpc)
                 tx_mid = max(-radians(20.0), min(radians(20.0), tilt_x + rate_tx * dt_mid))
                 ty_mid = max(-radians(20.0), min(radians(20.0), tilt_y + rate_ty * dt_mid))
                 a_now_xy = (
@@ -1551,8 +1551,7 @@ class RtlsController3D:
                 # to h=22 m (z_tgt=15 m) so terminal centering finishes smoothly inside MPC
                 # instead of discontinuously jumping to v1 guidance!
                 r_xy_pre = hypot(est.pos_enu_m[0], est.pos_enu_m[1])
-                v_xy_pre = hypot(est.vel_enu_m_s[0], est.vel_enu_m_s[1])
-                if (h_vref <= 40.0 and r_xy_pre < 3.0 and v_xy_pre < 2.5) or h_vref <= 22.0:
+                if (h_vref <= 40.0 and r_xy_pre < 4.0) or h_vref <= 22.0:
                     self._mpc_terminal_latched = True
                 if (
                     h_vref > 22.0
@@ -1624,8 +1623,8 @@ class RtlsController3D:
                     (
                         h_vref <= 30.0
                         and tilt_now_deg < 2.5
-                        and v_xy_mag_now < 2.0
-                        and r_xy_now < 3.0
+                        and v_xy_mag_now < 3.5
+                        and r_xy_now < 4.0
                     )
                     or (h_vref <= 14.0)
                     or (h_vref <= 36.0 and mpc_ref is None)

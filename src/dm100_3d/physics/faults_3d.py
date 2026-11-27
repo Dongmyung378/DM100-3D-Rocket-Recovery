@@ -417,8 +417,8 @@ class EngineClusterFaultModel3D:
                 self._fin_jam_locked[j] = False
 
         # Physical hydraulic runaway rate derating under aerodynamic hinge load
-        # (60 deg/s unloaded at q=0; ~32.6 deg/s at 13 kPa; ~20.9 deg/s at peak 29 kPa supersonic q)
-        jam_rate_eff = fin_rate_rad_s / (1.0 + max(0.0, float(dynamic_pressure_pa)) / 15_500.0)
+        # (60 deg/s unloaded at q=0; ~24.5 deg/s at 13 kPa; ~14.2 deg/s at peak 29 kPa supersonic q)
+        jam_rate_eff = fin_rate_rad_s / (1.0 + max(0.0, float(dynamic_pressure_pa)) / 9_000.0)
         out = list(fin_deflection)
         for i in range(4):
             if self.fin_jammed[i]:
