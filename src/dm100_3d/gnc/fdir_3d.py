@@ -127,15 +127,17 @@ class CausalFdir3D:
     ) -> FdirStatus3D:
         """Update Engine-Out & Fin-Jam detectors from strictly causal telemetry."""
         if self._last_meas_t is None:
-            self._last_meas_t = pkt.measurement_time_s
+            self._last_meas_t = pkt.time_s
             self._fin_hat[:] = np.asarray(pkt.fin_deflection_rad, dtype=np.float64)
             self._prev_fin_hat[:] = self._fin_hat
             self._prev2_fin_hat[:] = self._fin_hat
             return self.status()
 
-        dt = max(0.0, pkt.measurement_time_s - self._last_meas_t)
-        self._last_meas_t = pkt.measurement_time_s
-        if dt <= 1e-6 or pkt.packet_dropped or pkt.touchdown_detected:
+        # Hardwired onboard sensors (IMU gyro, fin resolver, chamber pressure) remain live at
+        # 50 Hz even during GPS/radio packet dropouts (`packet_dropped=True`), so clock off time_s!
+        dt = max(0.0, pkt.time_s - self._last_meas_t)
+        self._last_meas_t = pkt.time_s
+        if dt <= 1e-6 or pkt.touchdown_detected:
             return self.status()
 
         cmd = self._effective_cmd_at_measurement()

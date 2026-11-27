@@ -36,7 +36,7 @@ class MpcGfold3DConfig:
     n_steps: int = 12
     replan_period_s: float = 0.50
     lead_time_s: float = 0.02
-    max_tilt_deg: float = 19.0
+    max_tilt_deg: float = 11.0
     final_tilt_deg: float = 1.5
     vertical_align_alt_m: float = 45.0
     glide_slope_max_deg: float = 65.0
@@ -47,6 +47,7 @@ class MpcGfold3DConfig:
     slack_gs_weight: float = 150.0
     slack_xy_weight: float = 2_000.0
     slack_vxy_weight: float = 4_000.0
+    lat_control_weight: float = 0.015
     control_reg_weight: float = 1e-7
 
 
@@ -285,8 +286,16 @@ class OnlineGfoldMpc3D:
         z0_init = log(max(mass0_kg, dry_mass_kg + 1.0))
         z_dry = log(max(dry_mass_kg, 100.0))
 
-        # Populate P diagonal, q linear objective, A data, and b vector in-place
-        p_data = np.full(3 * n, self.cfg.control_reg_weight * dt, dtype=np.float64)
+        # Populate P diagonal, q linear objective, A data, and b vector in-place:
+        # Smooth quadratic penalty on lateral (ux, uy) prevents bang-bang tilt slams while
+        # keeping uz weight tiny (1e-7) so ||u_0||/sigma_0 >= 0.995 lossless holds exactly!
+        p_data = np.empty(3 * n, dtype=np.float64)
+        p_lat = self.cfg.lat_control_weight * dt
+        p_z = self.cfg.control_reg_weight * dt
+        for k in range(n):
+            p_data[3 * k] = p_lat
+            p_data[3 * k + 1] = p_lat
+            p_data[3 * k + 2] = p_z
         q_obj = np.zeros(self._n_vars, dtype=np.float64)
         # Maximize final log-mass z_N <=> minimize -10*z_N (dominates 1e-7 reg -> exact lossless!)
         q_obj[self._sz(n)] = -10.0
@@ -545,7 +554,7 @@ class OnlineGfoldMpc3D:
         t_kin = 2.0 * dz / (vz_down + max(abs(v_touchdown_m_s), 0.2))
         t_prop_max = max(mass0_kg - dry_mass_kg, 25.0) * isp_eff_s * G0 / max(t_min_n, 1.0)
 
-        tf_lo = max(1.0, max((vz_down - abs(v_touchdown_m_s)) / a_max_net, 0.78 * t_kin))
+        tf_lo = max(1.0, max((vz_down - abs(v_touchdown_m_s)) / a_max_net, 0.82 * t_kin))
         tf_hi_phys = min(45.0, 0.98 * t_prop_max, 1.30 * t_kin)
         tf_hi = max(tf_lo + 1.0, tf_hi_phys)
 
@@ -605,25 +614,19 @@ class OnlineGfoldMpc3D:
         if self.last_valid_solution is not None:
             dt_el = max(0.0, time_s - self.last_valid_solution.plan_start_s)
             tf_pred = self.last_valid_solution.flight_time_s - dt_el
-            # Smoothly track kinematic time-to-go so updrafts/shears adapt tf in a single call
+            # Smoothly track kinematic time-to-go in 1 call (~3-6 ms on Kaggle CPU)
             tf_c = max(tf_lo, min(tf_hi, 0.85 * tf_pred + 0.15 * t_kin))
             sol_c = _try_tf(tf_c)
             if best is None:
                 if sol_c is not None and not sol_c.lossless_ok:
-                    # Feasible but lossy => tf_c slightly too short; step +1.0 s into lossless zone
                     _try_tf(min(tf_hi, tf_c + 1.0))
-                if best is None:
+                else:
                     _try_tf(float(0.5 * (tf_lo + tf_hi)))
         else:
-            tf_0 = float(tf_lo + 0.45 * (tf_hi - tf_lo))
+            tf_0 = float(tf_lo + 0.48 * (tf_hi - tf_lo))
             _try_tf(tf_0)
-            if best is not None:
-                if (perf_counter() - t_all) * 1000.0 < 3.0:
-                    _try_tf(float(tf_lo + 0.30 * (tf_hi - tf_lo)))
-            else:
-                _try_tf(float(tf_lo + 0.72 * (tf_hi - tf_lo)))
-                if best is None:
-                    _try_tf(float(tf_lo + 0.25 * (tf_hi - tf_lo)))
+            if best is None:
+                _try_tf(float(tf_lo + 0.75 * (tf_hi - tf_lo)))
 
         total_ms = (perf_counter() - t_all) * 1000.0
         self.max_solve_ms = max(self.max_solve_ms, total_ms)

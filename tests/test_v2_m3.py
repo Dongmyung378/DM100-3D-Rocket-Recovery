@@ -472,6 +472,35 @@ def test_allocator_3x4_roll_priority_qp_cancels_jammed_fin_roll() -> None:
     # All healthy fins stay well inside +/-20 deg physical stop
     assert np.all(np.abs(u_cmd) <= radians(20.0) + 1e-9)
 
+    # Also test severe saturation + ill-conditioned inertia ratio (Ixx/Izz = 25 -> cond(H) ~ 1e6):
+    # Exact active-set 3x3 QP must STILL match req_guarded[2] to < 50 N*m even when a fin saturates!
+    out_sat = alloc.allocate(
+        Allocation3DInput(
+            requested_torque_body_nm=(160_000.0, 0.0, -500.0),
+            background_torque_body_nm=(0.0, 0.0, 0.0),
+            inertia_diag_kg_m2=(300_000.0, 300_000.0, 12_000.0),
+            lever_arm_m=9.0,
+            sizing_thrust_n=0.0,
+            fin_arm_z_m=13.4,
+            dynamic_pressure_pa=18_000.0,
+            fin_extension=1.0,
+            alpha_retro_xy_rad=(0.0, 0.0),
+            rcs_available=True,
+            allow_fin_allocation=True,
+            angular_accel_guard_deg_s2=35.0,
+            fin_jacobian_3x4=b_3x4 * 2.0,
+            fin_ref_deflection_rad=(0.0, 0.0, 0.0, 0.0),
+            fin_ref_torque_body_nm=(0.0, 0.0, 0.0),
+            fin_jammed_mask=(False, False, True, False),
+            fin_jammed_angles_rad=(0.0, 0.0, jam_rad, 0.0),
+        )
+    )
+    u_sat = np.array(out_sat.fin_deflection_rad, dtype=np.float64)
+    net_sat = (b_3x4 * 2.0) @ u_sat
+    assert abs(float(net_sat[2]) - (-500.0)) < 50.0
+    assert abs(u_sat[3]) >= radians(19.9)  # Fin 3 genuinely saturated at -20 deg!
+    assert np.all(np.abs(u_sat) <= radians(20.0) + 1e-9)
+
 
 # ---------------------------------------------------------------------------
 # 4. Online 2 Hz N=12 Log-Mass Clarabel GFOLD MPC

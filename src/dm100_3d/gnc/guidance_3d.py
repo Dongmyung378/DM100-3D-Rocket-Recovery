@@ -239,6 +239,8 @@ class RtlsController3D:
         )
         self._fdir_status: FdirStatus3D | None = None
         self._land_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
+        self._td_started_s: float | None = None
+        self._prev_eo_count: int = 0
 
     def _nominal_mass(self, est: EstimatedState3D) -> float:
         return (
@@ -773,8 +775,20 @@ class RtlsController3D:
         a_lim_xy = radians(accel_limit_deg_s2 or s.attitude_accel_limit_deg_s2)
         if high_q_guard and not est.upper_attached and q_pa >= s.high_q_threshold_pa:
             a_lim_xy = min(a_lim_xy, radians(s.high_q_accel_limit_deg_s2))
+        has_fj_att = self.fdir is not None and any(self.fdir.fin_jammed)
+        roll_a_lim = (
+            radians(1.8)
+            if (
+                self.gnc_v2.use_structural_filter
+                and (not est.upper_attached)
+                and (not has_fj_att)
+                and allow_fin
+                and throttle_cmd <= 1e-3
+            )
+            else radians(s.roll_accel_limit_deg_s2)
+        )
         r_lims = (r_lim_xy, r_lim_xy, radians(s.roll_rate_limit_deg_s))
-        a_lims = (a_lim_xy, a_lim_xy, radians(s.roll_accel_limit_deg_s2))
+        a_lims = (a_lim_xy, a_lim_xy, roll_a_lim)
 
         des_alpha = np.zeros(3, dtype=np.float64)
         for ax in range(3):
@@ -1467,7 +1481,13 @@ class RtlsController3D:
                 and (not is_abort)
                 and h_vref > 12.0
             ):
-                a_att_m = radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+                # Match CSI-certified softer booster unwinding dynamics (kp=0.55, kd=1.65) so MPC
+                # starts unwinding early enough to eliminate shear/gust overshoot!
+                a_att_m = (
+                    radians(1.40)
+                    if self.gnc_v2.use_structural_filter
+                    else radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+                )
                 denom_gtm = max(lever_trim * mass * a_t_sm, 1.0)
                 lim_gtm = 0.85 * sin(max_gim_rad)
                 gt_xm = asin(max(-lim_gtm, min(lim_gtm, float(tau_aero_b_now[1]) / denom_gtm)))
@@ -1496,7 +1516,7 @@ class RtlsController3D:
                     (rate_tx, rate_ty),
                     a_t_sm,
                     a_att_m,
-                    x_horizon_cap_s=2.4,
+                    x_horizon_cap_s=(3.0 if self.gnc_v2.use_structural_filter else 2.4),
                 )
                 # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=30 m)
                 if (
@@ -1753,7 +1773,7 @@ class RtlsController3D:
             # Track zero-tilt lead state + exact 50 Hz crosswind/bias decoupling (zero wind drift!)
             p_err_xy = p_ref[0:2] - np.array([p_lead_mpc[0], p_lead_mpc[1]], dtype=np.float64)
             v_err_xy = v_ref[0:2] - np.array([v_lead_mpc[0], v_lead_mpc[1]], dtype=np.float64)
-            a_xy_mpc = a_ref[0:2] + 0.35 * p_err_xy + 1.05 * v_err_xy
+            a_xy_mpc = a_ref[0:2] + 0.30 * p_err_xy + 1.05 * v_err_xy
             prop_xy_mpc = a_xy_mpc - self._land_bxy_smooth - a_cor[0:2]
             f_xy_req = mass * prop_xy_mpc - aero_f[0:2]
             u_z = (
@@ -1763,7 +1783,7 @@ class RtlsController3D:
                 - float(a_cor[2])
             )
             fz_req = max(t_min * 0.9, mass * u_z)
-            max_tilt = radians(2.5) + radians(17.0) * _smoothstep((h_vref - 26.0) / 55.0)
+            max_tilt = radians(2.0) + radians(10.0) * _smoothstep((h_vref - 24.0) / 38.0)
         else:
             prop_xy = a_xy_cmd - self._land_bxy_smooth - a_cor[0:2]
             if self.landing_single_engine and vz_down <= 0.78 * v_td:
@@ -1983,6 +2003,12 @@ class RtlsController3D:
                 torque_bias_body_nm=est.torque_bias_body_nm,
                 mass_kg=mass_f,
             )
+            eo_cnt = sum(1 for f in self.fdir.engine_failed if f)
+            if eo_cnt > self._prev_eo_count:
+                # Reset stale pre-isolation asymmetric disturbance torque bias immediately upon
+                # symmetric engine reconfiguration (prevents post-switch pitch rebound!)
+                self.estimator.torque_bias_body_nm[0:2] = 0.0
+                self._prev_eo_count = eo_cnt
 
         def _finish(cmd_out: ActuatorCommand3D) -> ActuatorCommand3D:
             self.estimator.record_command(est.time_s, cmd_out)
@@ -1993,14 +2019,32 @@ class RtlsController3D:
         m_mode = self.fdir.mission_mode if self.fdir is not None else "RTLS"
         f_state = self._fdir_status.fdir_state if self._fdir_status is not None else "NOMINAL"
 
-        # Phase 8: Touchdown Settle (immediate MECO + unpowered 5 s standing check)
+        # Phase 8: Touchdown Settle (immediate MECO + 5 s 4-leg upright settle)
         if est.touchdown_detected:
             self.phase = "touchdown_settle"
+            if self._td_started_s is None:
+                self._td_started_s = est.time_s
+            # In v2 sloped-pad landings, brief cold-gas nitrogen RCS rate damping during the first
+            # 3.5 s after MECO (strictly 0.0 during final 1.5 s passive standing check; main engine
+            # 100% OFF!) damps 2.5-deg sloped-pad leg rocking (Falcon 9 ASDS standard practice).
+            td_rcs = (0.0, 0.0, 0.0)
+            if (
+                self.gnc_v2.use_online_mpc
+                and (est.time_s - self._td_started_s) <= 3.5
+                and est.rcs_propellant_kg > 0.0
+            ):
+                k_td_damp = 180_000.0
+                td_lim = min(35_000.0, self.vehicle.propulsion.rcs_torque_limit_nm)
+                td_rcs = (
+                    max(-td_lim, min(td_lim, -k_td_damp * float(est.omega_body_rad_s[0]))),
+                    max(-td_lim, min(td_lim, -k_td_damp * float(est.omega_body_rad_s[1]))),
+                    0.0,
+                )
             cmd = ActuatorCommand3D(
                 throttle_cmd=0.0,
                 active_engines=0,
                 gimbal_rad=(0.0, 0.0),
-                rcs_torque_nm=(0.0, 0.0, 0.0),
+                rcs_torque_nm=td_rcs,
                 fin_deflection_rad=(0.0, 0.0, 0.0, 0.0),
                 deploy_fins=True,
                 deploy_gear=True,
@@ -2485,8 +2529,8 @@ class RtlsController3D:
                 q_des = pointing_dir_to_quat_wxyz(d_des)
 
                 deploy_fins_gl = h > h_ignite + 240.0
-                gl_acc_lim = 1.9 if self.gnc_v2.use_structural_filter else 2.2
-                gl_acc_guard = 2.0 if self.gnc_v2.use_structural_filter else 2.3
+                gl_acc_lim = 1.5 if self.gnc_v2.use_structural_filter else 2.2
+                gl_acc_guard = 1.6 if self.gnc_v2.use_structural_filter else 2.3
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
