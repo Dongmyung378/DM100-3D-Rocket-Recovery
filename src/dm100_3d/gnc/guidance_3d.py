@@ -13,7 +13,7 @@ Implements `ControllerProtocol3D` strictly causally (TelemetryPacket3D -> Actuat
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import asin, atan2, cos, degrees, exp, hypot, log, pi, radians, sin, sqrt
 
 import numpy as np
@@ -775,20 +775,8 @@ class RtlsController3D:
         a_lim_xy = radians(accel_limit_deg_s2 or s.attitude_accel_limit_deg_s2)
         if high_q_guard and not est.upper_attached and q_pa >= s.high_q_threshold_pa:
             a_lim_xy = min(a_lim_xy, radians(s.high_q_accel_limit_deg_s2))
-        has_fj_att = self.fdir is not None and any(self.fdir.fin_jammed)
-        roll_a_lim = (
-            radians(1.8)
-            if (
-                self.gnc_v2.use_structural_filter
-                and (not est.upper_attached)
-                and (not has_fj_att)
-                and allow_fin
-                and throttle_cmd <= 1e-3
-            )
-            else radians(s.roll_accel_limit_deg_s2)
-        )
         r_lims = (r_lim_xy, r_lim_xy, radians(s.roll_rate_limit_deg_s))
-        a_lims = (a_lim_xy, a_lim_xy, roll_a_lim)
+        a_lims = (a_lim_xy, a_lim_xy, radians(s.roll_accel_limit_deg_s2))
 
         des_alpha = np.zeros(3, dtype=np.float64)
         for ax in range(3):
@@ -960,6 +948,7 @@ class RtlsController3D:
                 fin_jammed_mask=fin_jam_mask,
                 fin_jammed_angles_rad=fin_jam_ang,
                 current_fin_deflection_rad=(est.fin_deflection_rad if has_fin_jam else None),
+                vb_gimbal_max_step_deg=(0.65 if self.gnc_v2.use_structural_filter else 1.6),
             )
         )
         # Guard pre-separation RCS torque against lighter post-separation booster inertia
@@ -1540,11 +1529,11 @@ class RtlsController3D:
                         + 2.0 * a_lo * z_tgt_mpc
                         + ((a_hi - a_lo) / h_shape) * z_tgt_mpc * z_tgt_mpc
                     )
-                    # Cap MPC planned thrust at smooth 1-engine tracking envelope (~78% max)
-                    # so GFOLD avoids 3.1g cliff-dive bang-bang & leaves 22% tracking headroom.
+                    # Cap MPC planned thrust at smooth 1-engine tracking envelope (~72% max)
+                    # so GFOLD avoids cliff-dive bang-bang & leaves ample tracking headroom.
                     t_max_mpc = max(
                         t_min_1 + 25_000.0,
-                        min(t_max_1, mass * (g_loc + a_hi + 2.5)),
+                        min(t_max_1, mass * (g_loc + a_hi + 1.0)),
                     )
                     self.online_mpc.solve(
                         time_s=est.time_s,
@@ -1782,8 +1771,13 @@ class RtlsController3D:
                 + 1.35 * (float(v_ref[2]) - est.vel_enu_m_s[2])
                 - float(a_cor[2])
             )
+            # Anti-hover-stall guard: prevent MPC from slamming vertical thrust when already
+            # descending slower than the smooth v1 Stage-B profile (eliminates h=58 m stall).
+            if vz_down < 0.92 * v_stage_b_cap:
+                u_z_v1 = (az_net + g_loc - b_z - float(a_cor[2])) - float(aero_f[2]) / mass
+                u_z = min(u_z, max(t_min / mass, u_z_v1 + 0.50))
             fz_req = max(t_min * 0.9, mass * u_z)
-            max_tilt = radians(2.0) + radians(10.0) * _smoothstep((h_vref - 24.0) / 38.0)
+            max_tilt = radians(2.0) + radians(9.0) * _smoothstep((h_vref - 32.0) / 55.0)
         else:
             prop_xy = a_xy_cmd - self._land_bxy_smooth - a_cor[0:2]
             if self.landing_single_engine and vz_down <= 0.78 * v_td:
@@ -1811,7 +1805,12 @@ class RtlsController3D:
         thrust_tilt_body_xy: tuple[float, float] | None = None
         if vertical_body:
             lever = max(cg - self.vehicle.geometry.nozzle_station_m, 1.0)
-            lat_lim = 0.85 * self.vehicle.propulsion.rcs_torque_limit_nm / lever
+            vb_lat_scale = (
+                _smoothstep((est.time_s - (self._vb_started_s or est.time_s)) / 0.45)
+                if self.gnc_v2.use_structural_filter
+                else 1.0
+            )
+            lat_lim = 0.85 * vb_lat_scale * self.vehicle.propulsion.rcs_torque_limit_nm / lever
             f_center = fz_req * np.array([sin(tilt_x), sin(tilt_y)], dtype=np.float64)
             df = f_xy_req - f_center
             df_nrm = float(np.linalg.norm(df))
@@ -1894,7 +1893,7 @@ class RtlsController3D:
         land_rate_lim = 9.0
         if vertical_body and degrees(tilt_angle_rad(est.quat_wxyz)) < 2.9:
             if self.gnc_v2.use_structural_filter:
-                land_rate_lim = 0.35 + 5.65 * _smoothstep((h_vref - 0.40) / 2.0)
+                land_rate_lim = 0.22 + 5.78 * _smoothstep((h_vref - 0.65) / 3.1)
             else:
                 land_rate_lim = 0.25 + 5.75 * _smoothstep((h_vref - 0.65) / 3.1)
         vb_blend = (
@@ -2005,9 +2004,10 @@ class RtlsController3D:
             )
             eo_cnt = sum(1 for f in self.fdir.engine_failed if f)
             if eo_cnt > self._prev_eo_count:
-                # Reset stale pre-isolation asymmetric disturbance torque bias immediately upon
-                # symmetric engine reconfiguration (prevents post-switch pitch rebound!)
-                self.estimator.torque_bias_body_nm[0:2] = 0.0
+                # Reset stale pre-isolation asymmetric disturbance torque bias & Matched-DOB SOS
+                # state immediately upon symmetric engine reconfiguration (no pitch rebound!).
+                self.estimator.reset_torque_bias_on_reconfig(upper_attached=est.upper_attached)
+                est = replace(est, torque_bias_body_nm=(0.0, 0.0, est.torque_bias_body_nm[2]))
                 self._prev_eo_count = eo_cnt
 
         def _finish(cmd_out: ActuatorCommand3D) -> ActuatorCommand3D:
@@ -2028,13 +2028,11 @@ class RtlsController3D:
             # 3.5 s after MECO (strictly 0.0 during final 1.5 s passive standing check; main engine
             # 100% OFF!) damps 2.5-deg sloped-pad leg rocking (Falcon 9 ASDS standard practice).
             td_rcs = (0.0, 0.0, 0.0)
-            if (
-                self.gnc_v2.use_online_mpc
-                and (est.time_s - self._td_started_s) <= 3.5
-                and est.rcs_propellant_kg > 0.0
-            ):
-                k_td_damp = 180_000.0
-                td_lim = min(35_000.0, self.vehicle.propulsion.rcs_torque_limit_nm)
+            dt_td = est.time_s - self._td_started_s
+            if self.gnc_v2.use_online_mpc and dt_td <= 3.5 and est.rcs_propellant_kg > 0.0:
+                fade_td = 1.0 - _smoothstep((dt_td - 3.0) / 0.5)
+                k_td_damp = 900_000.0 * fade_td
+                td_lim = min(45_000.0, self.vehicle.propulsion.rcs_torque_limit_nm) * fade_td
                 td_rcs = (
                     max(-td_lim, min(td_lim, -k_td_damp * float(est.omega_body_rad_s[0]))),
                     max(-td_lim, min(td_lim, -k_td_damp * float(est.omega_body_rad_s[1]))),
@@ -2412,6 +2410,7 @@ class RtlsController3D:
                     rate_limit_deg_s=6.5,
                     accel_limit_deg_s2=1.6,
                     allow_fin=True,
+                    accel_guard_deg_s2=(2.2 if self.gnc_v2.use_structural_filter else 3.5),
                     use_xy_torque_bias=(eb_el > 1.2),
                     engine_mask_7=eb_mask_7,
                 )

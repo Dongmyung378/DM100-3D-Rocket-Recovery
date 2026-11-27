@@ -38,7 +38,7 @@ class MpcGfold3DConfig:
     lead_time_s: float = 0.02
     max_tilt_deg: float = 11.0
     final_tilt_deg: float = 1.5
-    vertical_align_alt_m: float = 45.0
+    vertical_align_alt_m: float = 65.0
     glide_slope_max_deg: float = 65.0
     pad_margin_m: float = 2.0
     lossless_min_ratio: float = 0.98
@@ -47,7 +47,7 @@ class MpcGfold3DConfig:
     slack_gs_weight: float = 150.0
     slack_xy_weight: float = 2_000.0
     slack_vxy_weight: float = 4_000.0
-    lat_control_weight: float = 0.015
+    lat_control_weight: float = 0.040
     control_reg_weight: float = 1e-7
 
 
@@ -102,9 +102,10 @@ class OnlineGfoldMpc3D:
         self._settings.verbose = False
         self._settings.presolve_enable = False
         self._settings.max_iter = 35
-        self._settings.tol_gap_abs = 5e-4
-        self._settings.tol_gap_rel = 5e-4
-        self._settings.tol_feas = 5e-4
+        self._settings.time_limit = 0.0095
+        self._settings.tol_gap_abs = 1e-3
+        self._settings.tol_gap_rel = 1e-3
+        self._settings.tol_feas = 1e-3
 
         # Reusable Clarabel solver instance updated in-place via solver.update(...)
         self._solver: clarabel.DefaultSolver | None = None
@@ -407,17 +408,19 @@ class OnlineGfoldMpc3D:
             set_row([(self._ua(k, 1), -1.0)], 0.0)
             set_row([(self._ua(k, 2), -1.0)], 0.0)
 
-        # 4. SecondOrderConeT(3): progressive tilt cone (fixed convex node index k_vert!)
-        # Tapers smoothly from max_tilt_deg at k=0 down to 4.0 deg at k=k_vert-1, then
-        # final_tilt_deg for k>=k_vert so Clarabel executes large shear diverts EARLY at high
-        # altitude (400..150 m) instead of deferring braking to the bottom and overshooting!
+        # 4. SecondOrderConeT(3): progressive altitude-tapered tilt cone (fixed convex k_vert!)
+        # Tapers smoothly with initial altitude AND remaining horizon down to final_tilt_deg so
+        # the 4.5 s CSI-certified attitude loop finishes unwinding well before h = 30 m handoff.
         tan_fin = tan(radians(self.cfg.final_tilt_deg))
+        alt_frac = min(1.0, max(0.0, (float(pos0[2]) - 55.0) / 140.0))
+        top_tilt_deg = 2.5 + (self.cfg.max_tilt_deg - 2.5) * alt_frac
+        mid_tilt_deg = min(3.2, top_tilt_deg)
         for k in range(n):
             if k >= k_vert:
                 t_lim = tan_fin
             else:
                 frac_rem = (k_vert - k) / max(k_vert, 1)
-                theta_k_deg = 4.0 + (self.cfg.max_tilt_deg - 4.0) * (frac_rem**0.75)
+                theta_k_deg = mid_tilt_deg + (top_tilt_deg - mid_tilt_deg) * (frac_rem**0.75)
                 t_lim = tan(radians(theta_k_deg))
             set_row([(self._ua(k, 2), -t_lim)], 0.0)
             set_row([(self._ua(k, 0), -1.0)], 0.0)
@@ -554,9 +557,9 @@ class OnlineGfoldMpc3D:
         t_kin = 2.0 * dz / (vz_down + max(abs(v_touchdown_m_s), 0.2))
         t_prop_max = max(mass0_kg - dry_mass_kg, 25.0) * isp_eff_s * G0 / max(t_min_n, 1.0)
 
-        tf_lo = max(1.0, max((vz_down - abs(v_touchdown_m_s)) / a_max_net, 0.82 * t_kin))
-        tf_hi_phys = min(45.0, 0.98 * t_prop_max, 1.30 * t_kin)
-        tf_hi = max(tf_lo + 1.0, tf_hi_phys)
+        tf_lo = max(1.0, max((vz_down - abs(v_touchdown_m_s)) / a_max_net, 0.84 * t_kin))
+        tf_hi_phys = min(45.0, 0.98 * t_prop_max, 1.12 * t_kin)
+        tf_hi = max(tf_lo + 0.8, tf_hi_phys)
 
         # Vertical aero drag + terminal ground-effect acceleration along the N nodes
         # (horizontal crosswind/bias is compensated directly at 50 Hz so MPC plans exact
@@ -614,18 +617,19 @@ class OnlineGfoldMpc3D:
         if self.last_valid_solution is not None:
             dt_el = max(0.0, time_s - self.last_valid_solution.plan_start_s)
             tf_pred = self.last_valid_solution.flight_time_s - dt_el
-            # Smoothly track kinematic time-to-go in 1 call (~3-6 ms on Kaggle CPU)
-            tf_c = max(tf_lo, min(tf_hi, 0.85 * tf_pred + 0.15 * t_kin))
+            # Smoothly track kinematic time-to-go in 1 call (~3-7 ms on Kaggle CPU);
+            # enforce strict WCET budget so retries never exceed 12 ms on shared CPU.
+            tf_c = max(tf_lo, min(tf_hi, 0.50 * tf_pred + 0.50 * t_kin))
             sol_c = _try_tf(tf_c)
-            if best is None:
+            if best is None and (perf_counter() - t_all) * 1000.0 < 4.5:
                 if sol_c is not None and not sol_c.lossless_ok:
-                    _try_tf(min(tf_hi, tf_c + 1.0))
+                    _try_tf(min(tf_hi, tf_c + 0.8))
                 else:
                     _try_tf(float(0.5 * (tf_lo + tf_hi)))
         else:
-            tf_0 = float(tf_lo + 0.48 * (tf_hi - tf_lo))
+            tf_0 = float(tf_lo + 0.45 * (tf_hi - tf_lo))
             _try_tf(tf_0)
-            if best is None:
+            if best is None and (perf_counter() - t_all) * 1000.0 < 4.5:
                 _try_tf(float(tf_lo + 0.75 * (tf_hi - tf_lo)))
 
         total_ms = (perf_counter() - t_all) * 1000.0

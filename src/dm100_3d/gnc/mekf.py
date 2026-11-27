@@ -916,6 +916,13 @@ class CausalEstimator3D:
             )
             self.torque_bias_body_nm[ax_i] = max(-bounds[ax_i], min(bounds[ax_i], upd))
 
+    def reset_torque_bias_on_reconfig(self, *, upper_attached: bool) -> None:
+        """Clear stale pre-isolation torque bias & Matched-DOB SOS filter state on EO switch."""
+        self.torque_bias_body_nm[0:2] = 0.0
+        self._prev_ang_sample = None
+        if self._csi_dob_torque_filter is not None:
+            self._csi_dob_torque_filter.reset((0.0, 0.0), upper_attached=upper_attached)
+
     def reset_for_separation(
         self, p_new: NDArray[np.float64], v_new: NDArray[np.float64], time_s: float = 0.0
     ) -> None:

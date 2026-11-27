@@ -52,6 +52,7 @@ class Allocation3DInput:
     fin_jammed_mask: tuple[bool, bool, bool, bool] | None = None
     fin_jammed_angles_rad: tuple[float, float, float, float] | None = None
     current_fin_deflection_rad: tuple[float, float, float, float] | None = None
+    vb_gimbal_max_step_deg: float = 1.6
 
 
 @dataclass(frozen=True, slots=True)
@@ -290,14 +291,15 @@ class PriorityControlAllocator3D:
 
             fin_cmd = [float(u_sol[0]), float(u_sol[1]), float(u_sol[2]), float(u_sol[3])]
             fin_tau = t_ref + b_fin @ (u_sol - u_ref)
-            # Slew-midpoint fin torque for Stage-3 RCS ONLY when healthy fins are actively slewing:
-            # `cur_j` already lags the true plant fin by 1.0*dt (resolver lag), so advance 1.5*dt
-            # to predict the actual step-midpoint fin angle and avoid Roll-RCS over-correction!
+            # Smooth slew-midpoint fin torque for Stage-3 RCS: `cur_j` lags the true plant fin by
+            # 1.0*dt (resolver lag), so advance 1.5*dt and smoothly blend [0.25, 0.55] deg into
+            # `u_sol` so RCS engages immediately on jam detection AND ramps off with zero step kick!
             if inp.current_fin_deflection_rad is not None:
                 f_rate = radians(fins.deflection_rate_deg_s)
                 f_tau_act = fins.actuator_time_constant_s
                 dt_pred = 1.5 * inp.control_dt_s
-                slew_gate = radians(1.5)
+                gate_lo = radians(0.25)
+                gate_hi = radians(0.55)
                 u_mid = np.zeros(4, dtype=np.float64)
                 for j in range(4):
                     if jam_mask[j]:
@@ -310,11 +312,17 @@ class PriorityControlAllocator3D:
                             min(f_rate * dt_pred, df_j * (1.0 - exp(-dt_pred / f_tau_act))),
                         )
                         u_pred_j = cur_j + step_j
-                        if abs(float(u_sol[j]) - u_pred_j) > slew_gate:
+                        err_j = abs(float(u_sol[j]) - u_pred_j)
+                        if err_j <= gate_lo:
+                            u_mid[j] = u_sol[j]
+                        elif err_j >= gate_hi:
                             active_fin_slew = True
                             u_mid[j] = u_pred_j
                         else:
-                            u_mid[j] = u_sol[j]
+                            w_s = (err_j - gate_lo) / (gate_hi - gate_lo)
+                            if w_s > 0.25:
+                                active_fin_slew = True
+                            u_mid[j] = (1.0 - w_s) * float(u_sol[j]) + w_s * u_pred_j
                 fin_tau_for_rcs = t_ref + b_fin @ (u_mid - u_ref)
             else:
                 fin_tau_for_rcs = fin_tau
@@ -383,7 +391,7 @@ class PriorityControlAllocator3D:
                 # In vertical-body terminal mode, steer thrust laterally within RCS counter-margin
                 rcs_lim = prop.rcs_torque_limit_nm
                 des_gy, des_gx = inp.thrust_tilt_cmd_body_xy
-                max_step = radians(1.6)
+                max_step = radians(inp.vb_gimbal_max_step_deg)
                 lo_gy = max(
                     -self._gim_lim,
                     asin(max(-1.0, min(1.0, (-rcs_lim - float(res_after_fin[1])) / t_lev))),

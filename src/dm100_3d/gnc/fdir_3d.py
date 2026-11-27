@@ -285,11 +285,11 @@ class CausalFdir3D:
                     dm_j = max(-max_lead, min(max_lead, meas_j - self._prev_fin_meas_rad[j]))
                     self._prev_fin_meas_rad[j] = meas_j
                     if self.fin_jammed[j]:
-                        # Damped causal lead ONLY during active runaway (> 17.5 deg/s); once settled
+                        # Damped causal lead ONLY during active runaway (> 22.5 deg/s); once settled
                         # on stop, low-pass filter meas_j so resolver noise never chatters Roll RCS!
-                        if abs(dm_j) > radians(0.35):
+                        if abs(dm_j) > radians(0.45):
                             self.fin_jam_angles_rad[j] = max(
-                                -f_lim, min(f_lim, meas_j + 0.65 * dm_j)
+                                -f_lim, min(f_lim, meas_j + 0.45 * dm_j)
                             )
                         else:
                             cur_est = self.fin_jam_angles_rad[j]
@@ -307,13 +307,13 @@ class CausalFdir3D:
                         abs(meas_j - float(self._fin_hat[j])),
                     )
                     thresh = max(radians(1.5), 1.5 * slew_step_j)
-                    thresh_fast = max(radians(0.85), 1.35 * slew_step_j)
-                    if err_min > thresh or (err_min > thresh_fast and roll_kick_deg_s2 > 3.8):
+                    thresh_fast = max(radians(0.65), 1.35 * slew_step_j)
+                    if err_min > thresh or (err_min > thresh_fast and roll_kick_deg_s2 > 3.0):
                         self._fin_err_count[j] += 1
-                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 3.8)
+                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 3.0)
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
-                            lead_init = 0.65 * dm_j if abs(dm_j) > radians(0.35) else 0.0
+                            lead_init = 0.85 * dm_j if abs(dm_j) > radians(0.40) else 0.0
                             self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + lead_init))
                             if self.fin_jam_detected_time_s is None:
                                 self.fin_jam_detected_time_s = pkt.time_s

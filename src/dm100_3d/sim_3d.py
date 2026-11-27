@@ -1132,9 +1132,14 @@ class MuJoCoPlant3D:
                     v * delivered_ratio for v in self._last_chamber_ratios_7
                 )  # type: ignore[assignment]
 
+            td_rcs_ok = (
+                pv2.any_enabled()
+                and self.touchdown_time_s is not None
+                and (self.time_s - self.touchdown_time_s) <= 3.5
+            )
             rcs_cmd = (
                 cmd.rcs_torque_nm
-                if (self.rcs_prop_kg > 0.0 and self.touchdown_time_s is None)
+                if (self.rcs_prop_kg > 0.0 and (self.touchdown_time_s is None or td_rcs_ok))
                 else (0.0, 0.0, 0.0)
             )
 
@@ -1513,14 +1518,53 @@ class MuJoCoPlant3D:
                 if pv2.sloped_pad
                 else 0.0
             )
-            in_ground_contact = self.touchdown_time_s is not None or (
-                in_contact_zone
-                and (
-                    self.body.sample_contact().any_contact
-                    or float(p_after[2]) - mp.cg_station_m - z_surf_after
-                    <= -self.vehicle.landing_gear.foot_station_m + 0.05
+            if pv2.any_enabled() and in_contact_zone:
+                cs_pre = self.body.sample_contact()
+                r_wb_after = quat_to_rotmat(q_after)
+                gear = self.vehicle.landing_gear
+                min_foot_clear = min(
+                    float(
+                        (
+                            p_after
+                            + r_wb_after
+                            @ np.array(
+                                [
+                                    ux * gear.half_span_m,
+                                    uy * gear.half_span_m,
+                                    gear.foot_station_m - mp.cg_station_m,
+                                ],
+                                dtype=np.float64,
+                            )
+                        )[2]
+                    )
+                    - self.body.surface_height_and_normal(
+                        float(
+                            p_after[0]
+                            + (r_wb_after[0, 0] * ux + r_wb_after[0, 1] * uy) * gear.half_span_m
+                        ),
+                        float(
+                            p_after[1]
+                            + (r_wb_after[1, 0] * ux + r_wb_after[1, 1] * uy) * gear.half_span_m
+                        ),
+                        upper_attached=self.upper_attached,
+                    )[0]
+                    for ux, uy in LEG_UNIT_DIRS
                 )
-            )
+                in_ground_contact = (
+                    self.touchdown_time_s is not None
+                    or cs_pre.any_contact
+                    or any(st > 1e-6 for st in cs_pre.leg_stroke_m)
+                    or min_foot_clear <= 0.05
+                )
+            else:
+                in_ground_contact = self.touchdown_time_s is not None or (
+                    in_contact_zone
+                    and (
+                        self.body.sample_contact().any_contact
+                        or float(p_after[2]) - mp.cg_station_m - z_surf_after
+                        <= -self.vehicle.landing_gear.foot_station_m + 0.05
+                    )
+                )
             self.max_q_pa = max(self.max_q_pa, ft.dynamic_pressure_pa)
             self.max_heat_flux_w_m2 = max(self.max_heat_flux_w_m2, ft.heat_flux_w_m2)
             if self.upper_attached:
