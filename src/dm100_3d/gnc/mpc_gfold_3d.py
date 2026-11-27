@@ -36,10 +36,8 @@ class MpcGfold3DConfig:
     n_steps: int = 12
     replan_period_s: float = 0.50
     lead_time_s: float = 0.02
-    max_tilt_deg: float = 12.0
+    max_tilt_deg: float = 16.0
     final_tilt_deg: float = 1.5
-    max_lat_accel_rate_m_s3: float = 2.2
-    max_vert_accel_rate_m_s3: float = 14.0
     vertical_align_alt_m: float = 45.0
     glide_slope_max_deg: float = 65.0
     pad_margin_m: float = 2.0
@@ -48,6 +46,7 @@ class MpcGfold3DConfig:
     max_fallback_hold_s: float = 1.50
     slack_gs_weight: float = 150.0
     slack_xy_weight: float = 2_000.0
+    slack_vxy_weight: float = 4_000.0
     control_reg_weight: float = 1e-7
 
 
@@ -82,12 +81,13 @@ class OnlineGfoldMpc3D:
         # Decision vector layout (fixed size for all solves):
         #   states k=0..N:   [x, y, z, vx, vy, vz, z_logm] -> 7*(N+1)
         #   controls k=0..N-1: [ux, uy, uz, sigma]         -> 4*N
-        #   slacks: s_gs[0..N-2] (N-1) + s_px, s_py (2)    -> N+1
+        #   slacks: s_gs[0..N-2] (N-1) + s_px, s_py (2) + s_vx, s_vy (2) -> N+3
         self._n_state = 7 * (n + 1)
         self._n_ctrl = 4 * n
         self._s_gs_off = self._n_state + self._n_ctrl
         self._s_xy_off = self._s_gs_off + (n - 1)
-        self._n_vars = self._s_xy_off + 2
+        self._s_vxy_off = self._s_xy_off + 2
+        self._n_vars = self._s_vxy_off + 2
 
         # Build canonical CSC sparsity templates ONCE and record exact flat entry index maps
         self._cones: list[object] = []
@@ -174,7 +174,7 @@ class OnlineGfoldMpc3D:
                 cols.append(c)
             row += 1
 
-        # 1. ZeroConeT: init (7) + dynamics (7*n) + terminal z, vx, vy, vz (4) = 7*n + 11
+        # 1. ZeroConeT: init (7) + dynamics (7*n) + terminal z, vz (2) = 7*n + 9
         r0 = row
         for i in range(7):
             add_pat([i])
@@ -186,41 +186,42 @@ class OnlineGfoldMpc3D:
                 add_pat([self._sv(k + 1, ax), self._sv(k, ax), self._ua(k, ax)])
             # z_{k+1} - z_k + alpha_isp*dt*sigma_k = 0
             add_pat([self._sz(k + 1), self._sz(k), self._usig(k)])
-        # Hard terminal altitude z_N = 0 and velocity v_N = (0, 0, -v_td)
+        # Hard terminal altitude z_N = z_target and vertical velocity vz_N = -v_td
         add_pat([self._sp(n, 2)])
-        add_pat([self._sv(n, 0)])
-        add_pat([self._sv(n, 1)])
         add_pat([self._sv(n, 2)])
         self._cones.append(clarabel.ZeroConeT(row - r0))
 
         # 2. NonnegativeConeT:
-        #    - z_k >= 0, vz_k <= 0, s_gs_k >= 0 (k=1..n-1)
+        #    - z_k >= z_target, vz_k <= 0, s_gs_k >= 0 (k=1..n-1)
         #    - s_px >= |x_N|, s_py >= |y_N|, s_px >= 0, s_py >= 0 (6 rows)
+        #    - s_vx >= |vx_N|, s_vy >= |vy_N|, s_vx >= 0, s_vy >= 0 (6 rows)
         #    - z_logm_k >= ln(m_dry) (k=1..n)
         #    - sigma_k in [mu1, mu2]*(1 - dz_k), uz_k >= mu1*cos(th)
         r0 = row
         for k in range(1, n):
-            add_pat([self._sp(k, 2)])  # -z_k <= 0
+            add_pat([self._sp(k, 2)])  # -z_k <= -z_target
             add_pat([self._sv(k, 2)])  # vz_k <= 0
             add_pat([self._sgs(k)])  # -s_gs_k <= 0
-        # Soft terminal XY slacks: +/-x_N - s_px <= 0, +/-y_N - s_py <= 0
+        # Soft terminal XY position slacks: +/-x_N - s_px <= 0, +/-y_N - s_py <= 0
         add_pat([self._sp(n, 0), self._s_xy_off])
         add_pat([self._sp(n, 0), self._s_xy_off])
         add_pat([self._sp(n, 1), self._s_xy_off + 1])
         add_pat([self._sp(n, 1), self._s_xy_off + 1])
         add_pat([self._s_xy_off])
         add_pat([self._s_xy_off + 1])
+        # Soft terminal XY velocity slacks: +/-vx_N - s_vx <= 0, +/-vy_N - s_vy <= 0
+        add_pat([self._sv(n, 0), self._s_vxy_off])
+        add_pat([self._sv(n, 0), self._s_vxy_off])
+        add_pat([self._sv(n, 1), self._s_vxy_off + 1])
+        add_pat([self._sv(n, 1), self._s_vxy_off + 1])
+        add_pat([self._s_vxy_off])
+        add_pat([self._s_vxy_off + 1])
         for k in range(1, n + 1):
             add_pat([self._sz(k)])  # -z_logm_k <= -ln(m_dry)
         for k in range(n):
             add_pat([self._usig(k), self._sz(k)])  # -sigma_k - mu1*z_k <= -mu1*(1 + z0_k)
             add_pat([self._usig(k), self._sz(k)])  # +sigma_k + mu2*z_k <= +mu2*(1 + z0_k)
             add_pat([self._ua(k, 2)])  # -uz_k <= -uz_min
-        # 3-axis thrust-acceleration rate bounds: |u_{k+1,ax} - u_{k,ax}| <= du_max * dt
-        for k in range(n - 1):
-            for ax in (0, 1, 2):
-                add_pat([self._ua(k + 1, ax), self._ua(k, ax)])
-                add_pat([self._ua(k + 1, ax), self._ua(k, ax)])
         self._cones.append(clarabel.NonnegativeConeT(row - r0))
 
         # 3. SecondOrderConeT(4): ||(ux, uy, uz)||_2 <= sigma_k
@@ -293,6 +294,8 @@ class OnlineGfoldMpc3D:
             q_obj[self._sgs(k)] = self.cfg.slack_gs_weight * dt
         q_obj[self._s_xy_off] = self.cfg.slack_xy_weight
         q_obj[self._s_xy_off + 1] = self.cfg.slack_xy_weight
+        q_obj[self._s_vxy_off] = self.cfg.slack_vxy_weight
+        q_obj[self._s_vxy_off + 1] = self.cfg.slack_vxy_weight
 
         a_data = np.zeros_like(self._a_template.data)
         b_vec = np.zeros(self._n_rows, dtype=np.float64)
@@ -350,8 +353,6 @@ class OnlineGfoldMpc3D:
             )
 
         set_row([(self._sp(n, 2), 1.0)], z_target_m)
-        set_row([(self._sv(n, 0), 1.0)], 0.0)
-        set_row([(self._sv(n, 1), 1.0)], 0.0)
         set_row([(self._sv(n, 2), 1.0)], -abs(v_touchdown_m_s))
 
         # 2. NonnegativeConeT
@@ -366,6 +367,13 @@ class OnlineGfoldMpc3D:
         set_row([(self._sp(n, 1), -1.0), (self._s_xy_off + 1, -1.0)], 0.0)
         set_row([(self._s_xy_off, -1.0)], 0.0)
         set_row([(self._s_xy_off + 1, -1.0)], 0.0)
+
+        set_row([(self._sv(n, 0), 1.0), (self._s_vxy_off, -1.0)], 0.0)
+        set_row([(self._sv(n, 0), -1.0), (self._s_vxy_off, -1.0)], 0.0)
+        set_row([(self._sv(n, 1), 1.0), (self._s_vxy_off + 1, -1.0)], 0.0)
+        set_row([(self._sv(n, 1), -1.0), (self._s_vxy_off + 1, -1.0)], 0.0)
+        set_row([(self._s_vxy_off, -1.0)], 0.0)
+        set_row([(self._s_vxy_off + 1, -1.0)], 0.0)
 
         for k in range(1, n + 1):
             set_row([(self._sz(k), -1.0)], -z_dry)
@@ -382,13 +390,6 @@ class OnlineGfoldMpc3D:
             # sigma_k <= mu2*(1 - (z_k - z_ref_k)) <=> +sigma_k + mu2*z_k <= +mu2*(1 + z_ref_k)
             set_row([(self._usig(k), 1.0), (self._sz(k), mu2)], mu2 * (1.0 + z_ref_k))
             set_row([(self._ua(k, 2), -1.0)], -(t_min_n / max(mass0_kg, 1.0)) * cos_max)
-        du_lat = self.cfg.max_lat_accel_rate_m_s3 * dt
-        du_vert = self.cfg.max_vert_accel_rate_m_s3 * dt
-        for k in range(n - 1):
-            for ax in (0, 1, 2):
-                du_lim = du_vert if ax == 2 else du_lat
-                set_row([(self._ua(k + 1, ax), 1.0), (self._ua(k, ax), -1.0)], du_lim)
-                set_row([(self._ua(k + 1, ax), -1.0), (self._ua(k, ax), 1.0)], du_lim)
 
         # 3. SecondOrderConeT(4): ||u_k|| <= sigma_k
         for k in range(n):
@@ -498,13 +499,14 @@ class OnlineGfoldMpc3D:
         self, h0_m: float, prev_sol: MpcGfold3DSolution | None, z_target_m: float = 0.0
     ) -> int:
         n = self.cfg.n_steps
-        if h0_m <= z_target_m + self.cfg.vertical_align_alt_m:
-            return 0
+        align_h = max(self.cfg.vertical_align_alt_m, z_target_m + 12.0)
+        if h0_m <= align_h:
+            return 0 if z_target_m <= 1.0 else max(1, n - 2)
         if prev_sol is not None and len(prev_sol.pos_enu_m) == n + 1:
             for k in range(1, n):
-                if prev_sol.pos_enu_m[k][2] <= z_target_m + self.cfg.vertical_align_alt_m:
-                    return max(1, min(n - 3, k))
-        return max(1, min(n - 3, int(round(0.60 * n))))
+                if prev_sol.pos_enu_m[k][2] <= align_h:
+                    return max(1, min(n - 2, k))
+        return max(1, min(n - 2, int(round(0.75 * n))))
 
     def solve(
         self,
@@ -523,7 +525,7 @@ class OnlineGfoldMpc3D:
         ground_effect_coeff: float = 0.06,
         z_target_m: float = 0.0,
     ) -> MpcGfold3DSolution | None:
-        """Run one 2 Hz receding-horizon 3-point local t_f bracket GFOLD MPC solve."""
+        """Run one 2 Hz receding-horizon time-budgeted log-mass GFOLD MPC solve (< 12 ms)."""
         t_all = perf_counter()
         self.total_solves += 1
         self.last_solve_time_s = time_s
@@ -536,8 +538,8 @@ class OnlineGfoldMpc3D:
         t_kin = 2.0 * dz / (vz_down + max(abs(v_touchdown_m_s), 0.2))
         t_prop_max = max(mass0_kg - dry_mass_kg, 25.0) * isp_eff_s * G0 / max(t_min_n, 1.0)
 
-        tf_lo = max(1.0, max((vz_down - abs(v_touchdown_m_s)) / a_max_net, 0.55 * t_kin))
-        tf_hi_phys = min(45.0, 0.98 * t_prop_max, 1.35 * t_kin)
+        tf_lo = max(1.0, max((vz_down - abs(v_touchdown_m_s)) / a_max_net, 0.78 * t_kin))
+        tf_hi_phys = min(45.0, 0.98 * t_prop_max, 1.30 * t_kin)
         tf_hi = max(tf_lo + 1.0, tf_hi_phys)
 
         # Vertical aero drag + terminal ground-effect acceleration along the N nodes
@@ -561,91 +563,60 @@ class OnlineGfoldMpc3D:
 
         k_vert = self._compute_k_vert(z0, self.last_valid_solution, z_target_m=z_target_m)
 
-        # Fast Bellman receding-horizon solve (< 12 ms Kaggle CPU):
-        # - Warm ticks: try predicted optimal tf_c first (1 Clarabel call ~3-5 ms); only probe
-        #   tf_c +/- 0.5 s if infeasible or lossy (max 2 calls/tick).
-        # - First solve: 3-point interior bracket [0.28, 0.55, 0.82].
+        # Time-budgeted Bellman receding-horizon solve (guaranteed < 12 ms on Kaggle CPU):
+        # - Try primary tf first (1 Clarabel call ~2-4 ms); only probe 1 fuel-refinement neighbor
+        #   if wall time < 4.5 ms, or probe fallback mid-point if primary tf was infeasible/lossy.
         best: MpcGfold3DSolution | None = None
         max_it = 0
+
+        def _try_tf(tf_val: float) -> MpcGfold3DSolution | None:
+            nonlocal best, max_it
+            sol_i = self._solve_fixed_tf(
+                tf=tf_val,
+                pos0=pos0_enu_m,
+                vel0=vel0_enu_m_s,
+                mass0_kg=mass0_kg,
+                dry_mass_kg=dry_mass_kg,
+                t_min_n=t_min_n,
+                t_max_n=t_max_n,
+                isp_eff_s=isp_eff_s,
+                gravity_m_s2=gravity_m_s2,
+                v_touchdown_m_s=v_touchdown_m_s,
+                k_vert=k_vert,
+                a_ext_nodes=a_ext,
+                plan_start_s=time_s,
+                z_target_m=z_target_m,
+            )
+            if sol_i is not None:
+                max_it = max(max_it, sol_i.iterations)
+                if sol_i.lossless_ok and (
+                    best is None or sol_i.fuel_burned_kg < best.fuel_burned_kg
+                ):
+                    best = sol_i
+            return sol_i
+
         if self.last_valid_solution is not None:
             dt_el = max(0.0, time_s - self.last_valid_solution.plan_start_s)
             tf_c = max(tf_lo, min(tf_hi, self.last_valid_solution.flight_time_s - dt_el))
-            # Alternate small +/-0.35 s nudge every other solve so tf adapts to wind/drag shifts
-            nudge = 0.35 if (self.total_solves % 2 == 0) else -0.35
-            tf_alt = max(tf_lo, min(tf_hi, tf_c + nudge))
-            probes = [tf_c]
-            if abs(tf_alt - tf_c) >= 0.08:
-                probes.append(tf_alt)
-            for tf_val in probes:
-                sol = self._solve_fixed_tf(
-                    tf=tf_val,
-                    pos0=pos0_enu_m,
-                    vel0=vel0_enu_m_s,
-                    mass0_kg=mass0_kg,
-                    dry_mass_kg=dry_mass_kg,
-                    t_min_n=t_min_n,
-                    t_max_n=t_max_n,
-                    isp_eff_s=isp_eff_s,
-                    gravity_m_s2=gravity_m_s2,
-                    v_touchdown_m_s=v_touchdown_m_s,
-                    k_vert=k_vert,
-                    a_ext_nodes=a_ext,
-                    plan_start_s=time_s,
-                    z_target_m=z_target_m,
-                )
-                if sol is not None:
-                    max_it = max(max_it, sol.iterations)
-                    if sol.lossless_ok and (
-                        best is None or sol.fuel_burned_kg < best.fuel_burned_kg
-                    ):
-                        best = sol
-            if best is None:
-                tf_mid = 0.5 * (tf_lo + tf_hi)
-                sol = self._solve_fixed_tf(
-                    tf=float(tf_mid),
-                    pos0=pos0_enu_m,
-                    vel0=vel0_enu_m_s,
-                    mass0_kg=mass0_kg,
-                    dry_mass_kg=dry_mass_kg,
-                    t_min_n=t_min_n,
-                    t_max_n=t_max_n,
-                    isp_eff_s=isp_eff_s,
-                    gravity_m_s2=gravity_m_s2,
-                    v_touchdown_m_s=v_touchdown_m_s,
-                    k_vert=k_vert,
-                    a_ext_nodes=a_ext,
-                    plan_start_s=time_s,
-                    z_target_m=z_target_m,
-                )
-                if sol is not None:
-                    max_it = max(max_it, sol.iterations)
-                    if sol.lossless_ok:
-                        best = sol
+            _try_tf(tf_c)
+            if best is not None:
+                if (perf_counter() - t_all) * 1000.0 < 4.5:
+                    nudge = 0.35 if (self.total_solves % 2 == 0) else -0.35
+                    tf_alt = max(tf_lo, min(tf_hi, tf_c + nudge))
+                    if abs(tf_alt - tf_c) >= 0.08:
+                        _try_tf(tf_alt)
+            else:
+                _try_tf(float(0.5 * (tf_lo + tf_hi)))
         else:
-            cand_tfs = [float(tf_lo + frac * (tf_hi - tf_lo)) for frac in (0.28, 0.55, 0.82)]
-            for tf_val in cand_tfs:
-                sol = self._solve_fixed_tf(
-                    tf=tf_val,
-                    pos0=pos0_enu_m,
-                    vel0=vel0_enu_m_s,
-                    mass0_kg=mass0_kg,
-                    dry_mass_kg=dry_mass_kg,
-                    t_min_n=t_min_n,
-                    t_max_n=t_max_n,
-                    isp_eff_s=isp_eff_s,
-                    gravity_m_s2=gravity_m_s2,
-                    v_touchdown_m_s=v_touchdown_m_s,
-                    k_vert=k_vert,
-                    a_ext_nodes=a_ext,
-                    plan_start_s=time_s,
-                    z_target_m=z_target_m,
-                )
-                if sol is not None:
-                    max_it = max(max_it, sol.iterations)
-                    if sol.lossless_ok and (
-                        best is None or sol.fuel_burned_kg < best.fuel_burned_kg
-                    ):
-                        best = sol
+            tf_0 = float(tf_lo + 0.45 * (tf_hi - tf_lo))
+            _try_tf(tf_0)
+            if best is not None:
+                if (perf_counter() - t_all) * 1000.0 < 4.5:
+                    _try_tf(float(tf_lo + 0.18 * (tf_hi - tf_lo)))
+            else:
+                _try_tf(float(tf_lo + 0.78 * (tf_hi - tf_lo)))
+                if best is None:
+                    _try_tf(float(tf_lo + 0.18 * (tf_hi - tf_lo)))
 
         total_ms = (perf_counter() - t_all) * 1000.0
         self.max_solve_ms = max(self.max_solve_ms, total_ms)

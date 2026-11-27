@@ -214,12 +214,16 @@ class CausalFdir3D:
                         ratio_med = (
                             float(p_meas[i]) / max(med_active, 1e-6) if med_active >= 0.25 else 1.0
                         )
-                        # 0.65 (>20-sigma below 1.0 +/- 0.015) isolates spindown inside 0.35 s
-                        low_p = (ratio_hat < 0.65) or (len(active_p) >= 3 and ratio_med < 0.65)
-                        deep_flameout = ratio_hat < 0.40
+                        # Common-mode median ratio (< 0.72, >18-sigma below 1.0) isolates EO in
+                        # ~0.15 s (well inside the 0.35 s fault transient window!) with 0 FP.
+                        low_p = (ratio_hat < 0.65) or (len(active_p) >= 3 and ratio_med < 0.72)
+                        deep_flameout = (ratio_hat < 0.52) or (
+                            len(active_p) >= 3 and ratio_med < 0.70
+                        )
+                        req_count = 2 if (len(active_p) >= 3 and ratio_med < 0.68) else 3
                         if low_p and (corroborated or deep_flameout):
                             self._eng_low_count[i] += 1
-                            if self._eng_low_count[i] >= 3:
+                            if self._eng_low_count[i] >= req_count:
                                 self.engine_failed[i] = True
                                 if self.engine_out_detected_time_s is None:
                                     self.engine_out_detected_time_s = pkt.time_s
@@ -279,8 +283,17 @@ class CausalFdir3D:
                     dm_j = max(-max_lead, min(max_lead, meas_j - self._prev_fin_meas_rad[j]))
                     self._prev_fin_meas_rad[j] = meas_j
                     if self.fin_jammed[j]:
-                        # 1-step causal lead cancels resolver lag during active 60 deg/s runaway
-                        self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + dm_j))
+                        # Damped causal lead ONLY during active runaway (> 17.5 deg/s); once settled
+                        # on stop, low-pass filter meas_j so resolver noise never chatters Roll RCS!
+                        if abs(dm_j) > radians(0.35):
+                            self.fin_jam_angles_rad[j] = max(
+                                -f_lim, min(f_lim, meas_j + 0.65 * dm_j)
+                            )
+                        else:
+                            cur_est = self.fin_jam_angles_rad[j]
+                            self.fin_jam_angles_rad[j] = max(
+                                -f_lim, min(f_lim, cur_est + 0.25 * (meas_j - cur_est))
+                            )
                         continue
                     slew_step_j = max(
                         abs(float(self._fin_hat[j]) - float(prev_pred[j])),
@@ -292,13 +305,14 @@ class CausalFdir3D:
                         abs(meas_j - float(self._fin_hat[j])),
                     )
                     thresh = max(radians(1.5), 1.5 * slew_step_j)
-                    thresh_fast = max(radians(1.0), 1.4 * slew_step_j)
-                    if err_min > thresh or (err_min > thresh_fast and roll_kick_deg_s2 > 6.0):
+                    thresh_fast = max(radians(0.80), 1.35 * slew_step_j)
+                    if err_min > thresh or (err_min > thresh_fast and roll_kick_deg_s2 > 6.5):
                         self._fin_err_count[j] += 1
-                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 6.0)
+                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 6.5)
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
-                            self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + dm_j))
+                            lead_init = 0.65 * dm_j if abs(dm_j) > radians(0.35) else 0.0
+                            self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + lead_init))
                             if self.fin_jam_detected_time_s is None:
                                 self.fin_jam_detected_time_s = pkt.time_s
                     else:

@@ -158,6 +158,7 @@ class PriorityControlAllocator3D:
         fin_cmd = [0.0, 0.0, 0.0, 0.0]
         fin_tau = np.zeros(3, dtype=np.float64)
         fin_tau_for_rcs = np.zeros(3, dtype=np.float64)
+        active_fin_slew = False
 
         has_jam = (inp.fin_jammed_mask is not None) and any(inp.fin_jammed_mask)
         if has_jam and (f_gain > 1.0 or inp.fin_jacobian_3x4 is not None):
@@ -231,12 +232,14 @@ class PriorityControlAllocator3D:
 
             fin_cmd = [float(u_sol[0]), float(u_sol[1]), float(u_sol[2]), float(u_sol[3])]
             fin_tau = t_ref + b_fin @ (u_sol - u_ref)
-            # Slew-midpoint fin torque for Stage-3 RCS so 18 kN*m roll RCS instantly absorbs
-            # healthy-fin actuator slew lag (60 deg/s, tau=0.08 s) during Fin-Jam onset!
+            # Slew-midpoint fin torque for Stage-3 RCS ONLY when healthy fins are actively slewing
+            # (> 1.5 deg error during Fin-Jam onset); in steady tracking use exact `u_sol` so 0.05
+            # deg fin resolver noise never leaks +/-2 kN*m roll chatter into Stage-3 Roll RCS!
             if inp.current_fin_deflection_rad is not None:
                 f_rate = radians(fins.deflection_rate_deg_s)
                 f_tau_act = fins.actuator_time_constant_s
                 half_dt = 0.5 * inp.control_dt_s
+                slew_gate = radians(1.5)
                 u_mid = np.zeros(4, dtype=np.float64)
                 for j in range(4):
                     if jam_mask[j]:
@@ -244,11 +247,15 @@ class PriorityControlAllocator3D:
                     else:
                         cur_j = float(inp.current_fin_deflection_rad[j])
                         df_j = float(u_sol[j]) - cur_j
-                        step_j = max(
-                            -f_rate * half_dt,
-                            min(f_rate * half_dt, df_j * (1.0 - exp(-half_dt / f_tau_act))),
-                        )
-                        u_mid[j] = cur_j + step_j
+                        if abs(df_j) > slew_gate:
+                            active_fin_slew = True
+                            step_j = max(
+                                -f_rate * half_dt,
+                                min(f_rate * half_dt, df_j * (1.0 - exp(-half_dt / f_tau_act))),
+                            )
+                            u_mid[j] = cur_j + step_j
+                        else:
+                            u_mid[j] = u_sol[j]
                 fin_tau_for_rcs = t_ref + b_fin @ (u_mid - u_ref)
             else:
                 fin_tau_for_rcs = fin_tau
@@ -410,7 +417,11 @@ class PriorityControlAllocator3D:
             # never experiences step discontinuities or zero-g bang-bang slosh pumping.
             axis_guard = guard_rad_s2 / sqrt(3.0)
             i_ref = max(float(i_vec[0]), 1.0)
-            eff_deadband = 0.0 if has_jam else inp.rcs_deadband_nm
+            eff_deadband = (
+                0.0
+                if (has_jam and active_fin_slew)
+                else (min(inp.rcs_deadband_nm, 3_500.0) if has_jam else inp.rcs_deadband_nm)
+            )
             for ax_i in range(3):
                 val = float(res_after_tvc[ax_i])
                 db_i = eff_deadband * min(1.0, float(i_vec[ax_i]) / i_ref)

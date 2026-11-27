@@ -239,6 +239,7 @@ class RtlsController3D:
         )
         self._fdir_status: FdirStatus3D | None = None
         self._land_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
+        self._prev_glide_om_z: float | None = None
 
     def _nominal_mass(self, est: EstimatedState3D) -> float:
         return (
@@ -1514,6 +1515,12 @@ class RtlsController3D:
                         + 2.0 * a_lo * z_tgt_mpc
                         + ((a_hi - a_lo) / h_shape) * z_tgt_mpc * z_tgt_mpc
                     )
+                    # Cap MPC planned thrust at smooth 1-engine tracking envelope (~78% max)
+                    # so GFOLD avoids 3.1g cliff-dive bang-bang & leaves 22% tracking headroom.
+                    t_max_mpc = max(
+                        t_min_1 + 25_000.0,
+                        min(t_max_1, mass * (g_loc + a_hi + 2.5)),
+                    )
                     self.online_mpc.solve(
                         time_s=est.time_s,
                         pos0_enu_m=(p_lead_mpc[0], p_lead_mpc[1], h_vref),
@@ -1525,7 +1532,7 @@ class RtlsController3D:
                         mass0_kg=mass,
                         dry_mass_kg=self.vehicle.booster_dry_mass_kg,
                         t_min_n=t_min_1,
-                        t_max_n=t_max_1,
+                        t_max_n=t_max_mpc,
                         isp_eff_s=self.vehicle.propulsion.sea_level_isp_s,
                         gravity_m_s2=g_loc,
                         v_touchdown_m_s=v_tgt_mpc,
@@ -2436,30 +2443,34 @@ class RtlsController3D:
                 a_nrm = float(np.linalg.norm(raw_a_xy))
                 if a_nrm > max_a and a_nrm > 1e-9:
                     raw_a_xy *= max_a / a_nrm
-                # M3 Fin-Jam AoA Corridor Shift (CDR §3.4): keep |alpha_retro - d_jam| <= 4.5 deg
-                # AND |alpha_retro| <= 7.0 deg so healthy opposite fin NEVER hits +/-20 deg stop!
+                # M3 Fin-Jam AoA Corridor Shift (CDR §3.4): keep jammed fin well inside
+                # hinge limit while capping high-q body AoA (<= 4.5 deg at q >= 16 kPa -> 9.5 deg
+                # at low q) so the single healthy fin on the jammed axis NEVER hits +/-20 deg stop!
                 has_fj_gl = self.fdir is not None and any(self.fdir.fin_jammed)
                 if has_fj_gl and self.fdir is not None and q_pa >= 400.0:
-                    corridor_half_deg = 4.5 if q_pa >= 10_000.0 else 6.5
+                    hi_q_w = _smoothstep((q_pa - 8_000.0) / 8_000.0)
+                    body_lim_deg = 9.5 - 5.0 * hi_q_w
+                    corridor_half_deg = 15.0 - 3.5 * hi_q_w
                     for j in range(4):
                         if self.fdir.fin_jammed[j]:
                             d_jam_deg = degrees(self.fdir.fin_jam_angles_rad[j])
                             # Fins 0,1 (+X/-X) see ay_ret (1); fins 2,3 (+Y/-Y) see ax_ret (0)
                             ax_j = 1 if j < 2 else 0
-                            lo_c = max(-7.0, d_jam_deg - corridor_half_deg)
-                            hi_c = min(7.0, d_jam_deg + corridor_half_deg)
+                            lo_c = max(-body_lim_deg, d_jam_deg - corridor_half_deg)
+                            hi_c = min(body_lim_deg, d_jam_deg + corridor_half_deg)
                             if lo_c > hi_c:
-                                mid_c = max(-7.0, min(7.0, d_jam_deg))
+                                mid_c = max(-body_lim_deg, min(body_lim_deg, d_jam_deg))
                                 lo_c, hi_c = mid_c, mid_c
                             raw_a_xy[ax_j] = max(lo_c, min(hi_c, float(raw_a_xy[ax_j])))
-                    fj_cap = 7.5 if q_pa >= 12_000.0 else 10.5
+                    fj_cap = 11.0 - 4.5 * hi_q_w
                     a_fj_nrm = float(np.linalg.norm(raw_a_xy))
                     if a_fj_nrm > fj_cap and a_fj_nrm > 1e-9:
                         raw_a_xy *= fj_cap / a_fj_nrm
                 if est.engine_throttle > 0.01:
                     raw_a_xy[:] = 0.0
 
-                self._glide_alpha_xy_deg += (1.0 - exp(-s.control_dt_s / 0.35)) * (
+                tau_gl_a = 1.10 if has_fj_gl else 0.35
+                self._glide_alpha_xy_deg += (1.0 - exp(-s.control_dt_s / tau_gl_a)) * (
                     raw_a_xy - self._glide_alpha_xy_deg
                 )
                 # Construct 3D target pointing vector by tilting retrograde axis in ENU X/Y
@@ -2478,12 +2489,36 @@ class RtlsController3D:
                     rate_limit_deg_s=9.0,
                     accel_limit_deg_s2=gl_acc_lim,
                     allow_fin=True,
-                    rcs_deadband_nm=0.0
-                    if has_fj_gl
-                    else (5_000.0 if (q_pa > 1_000.0 and est.fin_extension >= 0.4) else 0.0),
+                    rcs_deadband_nm=(
+                        3_500.0
+                        if has_fj_gl
+                        else (5_000.0 if (q_pa > 1_000.0 and est.fin_extension >= 0.4) else 0.0)
+                    ),
                     accel_guard_deg_s2=gl_acc_guard,
                     use_xy_torque_bias=True,
                 )
+                # Strictly causal 50 Hz IMU-gyro emergency roll-kick damper (bridges the 20 ms
+                # resolver lag during high-q Fin-Jam runaway onset -> keeps fault peak < 25 deg/s^2)
+                om_z_gl = float(est.omega_body_rad_s[2])
+                if (
+                    self.fdir is not None
+                    and (not has_fj_gl)
+                    and self._prev_glide_om_z is not None
+                    and q_pa >= 2_000.0
+                    and est.fin_extension >= 0.90
+                    and est.rcs_propellant_kg > 0.0
+                ):
+                    roll_alpha_gl = (om_z_gl - self._prev_glide_om_z) / s.control_dt_s
+                    if abs(degrees(roll_alpha_gl)) > 5.0:
+                        i_zz_gl = mp.inertia_diag_kg_m2[2]
+                        rz_lim = self.vehicle.propulsion.rcs_roll_torque_limit_nm
+                        rz_emerg = max(-6_000.0, min(6_000.0, -0.55 * i_zz_gl * roll_alpha_gl))
+                        rcs = (
+                            rcs[0],
+                            rcs[1],
+                            max(-rz_lim, min(rz_lim, rcs[2] + rz_emerg)),
+                        )
+                self._prev_glide_om_z = om_z_gl
                 cmd = ActuatorCommand3D(
                     throttle_cmd=0.0,
                     active_engines=0,

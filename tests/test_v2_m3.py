@@ -501,8 +501,8 @@ def test_online_logmass_gfold_mpc_optimality_timing_and_fallback() -> None:
     assert sol1.lossless_ok
     assert sol1.lossless_ratio_0 >= 0.98
     assert sol1.iterations <= 35
-    assert sol1.solve_ms < 50.0  # Generous CI headroom; typical ~4-7 ms
-    assert sol1.k_vert == 7
+    assert sol1.solve_ms < 50.0  # Generous CI headroom; typical ~3-6 ms
+    assert sol1.k_vert == 9
     assert float(np.hypot(sol1.pos_enu_m[-1][0], sol1.pos_enu_m[-1][1])) < 1.0
     # Last nodes enforce near-vertical thrust cone <= 3 deg
     for k in range(sol1.k_vert, len(sol1.accel_enu_m_s2)):
