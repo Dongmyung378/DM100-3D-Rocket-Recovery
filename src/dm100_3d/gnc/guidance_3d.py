@@ -1516,12 +1516,12 @@ class RtlsController3D:
                 and (not is_abort)
                 and h_vref > 12.0
             ):
-                tau_lead_mpc = (2.35 if self.gnc_v2.use_structural_filter else 0.55) * min(
+                tau_lead_mpc = (2.15 if self.gnc_v2.use_structural_filter else 0.55) * min(
                     1.0, max(0.65, (h_vref - 20.0) / 60.0)
                 )
                 # Include mid-horizon angular-rate projection (capped +/-20 deg) so CSI attitude
                 # inertia during large landing-burn EO / blackout diverts unwinds without overshoot.
-                dt_mid = min(0.75, 0.40 * tau_lead_mpc)
+                dt_mid = min(0.70, 0.40 * tau_lead_mpc)
                 tx_mid = max(-radians(20.0), min(radians(20.0), tilt_x + rate_tx * dt_mid))
                 ty_mid = max(-radians(20.0), min(radians(20.0), tilt_y + rate_ty * dt_mid))
                 a_now_xy = (
@@ -1670,7 +1670,7 @@ class RtlsController3D:
                     p_stop_xy = p_xy + 2.40 * v_xy
                     r_stop = float(np.linalg.norm(p_stop_xy))
                     vb_mid_env = (
-                        _smoothstep((h_vref - 5.0) / 7.5)
+                        _smoothstep((h_vref - 3.2) / 5.5)
                         * _smoothstep((r_xy - 2.0) / 2.0)
                         * _smoothstep((r_stop - 1.5) / 2.0)
                     )

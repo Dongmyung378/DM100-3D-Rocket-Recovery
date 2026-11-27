@@ -416,23 +416,27 @@ class EngineClusterFaultModel3D:
                 self._fin_jam_target_rad[j] = tgt
                 self._fin_jam_locked[j] = False
 
-        # Physical hydraulic runaway rate derating under aerodynamic hinge load
-        # (60 deg/s unloaded at q=0; ~24.5 deg/s at 13 kPa; ~14.2 deg/s at peak 29 kPa supersonic q)
-        jam_rate_eff = fin_rate_rad_s / (1.0 + max(0.0, float(dynamic_pressure_pa)) / 9_000.0)
+        # Physical hydraulic runaway rate derating & viscous hinge-load cushioning
+        # (60 deg/s crisp stop at q=0; ~20..31 deg/s & 0.12 s hydraulic cushion at high q)
+        q_pos = max(0.0, float(dynamic_pressure_pa))
+        jam_rate_eff = fin_rate_rad_s / (1.0 + q_pos / 14_500.0)
+        tau_jam = max(fin_tau_s * (0.25 + 1.25 * min(1.0, q_pos / 14_500.0)), 1e-3)
+        alpha_jam = 1.0 - exp(-dt_s / tau_jam)
         out = list(fin_deflection)
         for i in range(4):
             if self.fin_jammed[i]:
                 tgt = self._fin_jam_target_rad[i]
                 if tgt is None or self._fin_jam_locked[i]:
                     continue
-                # Rate-limited actuator runaway until reaching jam stop, then hard-locked
+                # Rate-limited hydraulic runaway with viscous cushioning (1.5*fin_tau) into stop
                 diff = tgt - out[i]
                 max_step = jam_rate_eff * dt_s
-                if abs(diff) <= max_step + 1e-9:
+                if abs(diff) <= 1e-4:
                     out[i] = tgt
                     self._fin_jam_locked[i] = True
                 else:
-                    out[i] += max_step if diff > 0.0 else -max_step
+                    step_jam = max(-max_step, min(max_step, diff * alpha_jam))
+                    out[i] += step_jam
             else:
                 df = cmd_fin_deflection_rad[i] - out[i]
                 step_f = max(

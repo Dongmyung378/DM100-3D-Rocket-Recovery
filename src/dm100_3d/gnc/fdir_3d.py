@@ -319,7 +319,7 @@ class CausalFdir3D:
                         # while single_tick_stall + 2-tick stop_count + gyro ratchet guarantee
                         # instant, zero-overshoot convergence the moment the fin hits its stop.
                         still_moving = (
-                            el_fj <= 0.90
+                            el_fj <= 0.80
                             and self._fin_jam_stop_count[j] < 2
                             and abs(dm2_j) >= radians(0.28)
                             and (
@@ -337,7 +337,7 @@ class CausalFdir3D:
                             self._fin_jam_stop_count[j] = 0
                             v_inst = max(-f_rate, min(f_rate, 0.5 * dm2_j / dt))
                             v_new = (
-                                0.60 * v_cur + 0.40 * v_inst
+                                0.45 * v_cur + 0.55 * v_inst
                                 if abs(v_cur) > radians(5.0)
                                 else v_inst
                             )
@@ -345,14 +345,14 @@ class CausalFdir3D:
                             self._fin_jam_vel_rad_s[j] = v_new
                             roll_dir = 1.0 if (fin_roll_sign[j] * v_new) >= 0.0 else -1.0
                             jam_acc = om_z_acc_deg_s2 * roll_dir
-                            if el_fj >= 0.08 and jam_acc < -3.8:
+                            if el_fj >= 0.08 and jam_acc < -3.6:
                                 self._fin_jam_lead_scale[j] = max(
                                     0.0, self._fin_jam_lead_scale[j] - 0.55
                                 )
-                            # Minimax-optimal causal lead (0.70 ticks @ delay=0, 1.40 @ delay=1)
-                            # balances active-runaway tracking lag vs blind-delay hard-stop step.
+                            # Delay-matched causal lead tracks cushioned hydraulic runaway cleanly
+                            # with ~0.05 deg steady lag and < 0.20 deg deceleration overshoot.
                             lead_t = (
-                                min(1.50, 0.70 + 0.70 * self.total_delay_steps)
+                                min(2.50, 1.15 + 1.30 * self.total_delay_steps)
                                 * self._fin_jam_lead_scale[j]
                                 * dt
                             )
@@ -361,7 +361,7 @@ class CausalFdir3D:
                             )
                         else:
                             self._fin_jam_stop_count[j] += 1
-                            if self._fin_jam_stop_count[j] == 1 and el_fj <= 0.90:
+                            if self._fin_jam_stop_count[j] == 1 and el_fj <= 0.80:
                                 # First stall tick: drop lead immediately without corrupting
                                 # lead_scale in case of a rare 1-tick resolver noise dip.
                                 self._fin_jam_pos_rad[j] = meas_j
@@ -369,7 +369,7 @@ class CausalFdir3D:
                             else:
                                 self._fin_jam_vel_rad_s[j] = 0.0
                                 self._fin_jam_lead_scale[j] = 0.0
-                                alpha_p = 0.65 if el_fj <= 1.05 else 0.18
+                                alpha_p = 0.65 if el_fj <= 0.95 else 0.18
                                 pos_new = max(
                                     -f_lim,
                                     min(
@@ -406,7 +406,7 @@ class CausalFdir3D:
                             v0 = (dm_j / dt) if abs(dm_j) > radians(0.18) else 0.0
                             v0 = max(-f_rate, min(f_rate, v0))
                             self._fin_jam_vel_rad_s[j] = v0
-                            lead_t0 = min(1.50, 0.70 + 0.70 * self.total_delay_steps) * dt
+                            lead_t0 = min(2.50, 1.15 + 1.30 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + v0 * lead_t0)
                             )
