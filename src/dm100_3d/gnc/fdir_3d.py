@@ -95,6 +95,7 @@ class CausalFdir3D:
         self.engine_failed: list[bool] = [False] * 7
         self.fin_jammed: list[bool] = [False, False, False, False]
         self.fin_jam_angles_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
+        self._prev_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self.mission_mode: str = "RTLS"
         self.engine_out_detected_time_s: float | None = None
         self.fin_jam_detected_time_s: float | None = None
@@ -213,8 +214,9 @@ class CausalFdir3D:
                         ratio_med = (
                             float(p_meas[i]) / max(med_active, 1e-6) if med_active >= 0.25 else 1.0
                         )
-                        low_p = (ratio_hat < 0.55) or (len(active_p) >= 3 and ratio_med < 0.55)
-                        deep_flameout = ratio_hat < 0.35
+                        # 0.65 (>20-sigma below 1.0 +/- 0.015) isolates spindown inside 0.35 s
+                        low_p = (ratio_hat < 0.65) or (len(active_p) >= 3 and ratio_med < 0.65)
+                        deep_flameout = ratio_hat < 0.40
                         if low_p and (corroborated or deep_flameout):
                             self._eng_low_count[i] += 1
                             if self._eng_low_count[i] >= 3:
@@ -271,11 +273,14 @@ class CausalFdir3D:
 
             # Monitor only once fins are fully deployed (>= 0.90) to avoid entry-burn unfolding
             if (not pkt.upper_attached) and pkt.fin_extension >= 0.90:
+                max_lead = f_rate * dt
                 for j in range(4):
                     meas_j = float(pkt.fin_deflection_rad[j])
+                    dm_j = max(-max_lead, min(max_lead, meas_j - self._prev_fin_meas_rad[j]))
+                    self._prev_fin_meas_rad[j] = meas_j
                     if self.fin_jammed[j]:
-                        # Track real-time jammed fin angle immediately without smoothing lag
-                        self.fin_jam_angles_rad[j] = meas_j
+                        # 1-step causal lead cancels resolver lag during active 60 deg/s runaway
+                        self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + dm_j))
                         continue
                     slew_step_j = max(
                         abs(float(self._fin_hat[j]) - float(prev_pred[j])),
@@ -287,18 +292,20 @@ class CausalFdir3D:
                         abs(meas_j - float(self._fin_hat[j])),
                     )
                     thresh = max(radians(1.5), 1.5 * slew_step_j)
-                    thresh_fast = max(radians(1.6), 1.5 * slew_step_j)
-                    if err_min > thresh:
+                    thresh_fast = max(radians(1.0), 1.4 * slew_step_j)
+                    if err_min > thresh or (err_min > thresh_fast and roll_kick_deg_s2 > 6.0):
                         self._fin_err_count[j] += 1
-                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 8.0)
+                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 6.0)
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
-                            self.fin_jam_angles_rad[j] = meas_j
+                            self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + dm_j))
                             if self.fin_jam_detected_time_s is None:
                                 self.fin_jam_detected_time_s = pkt.time_s
                     else:
                         self._fin_err_count[j] = 0
             else:
+                for j in range(4):
+                    self._prev_fin_meas_rad[j] = float(pkt.fin_deflection_rad[j])
                 self._fin_err_count = [0, 0, 0, 0]
 
         return self.status()

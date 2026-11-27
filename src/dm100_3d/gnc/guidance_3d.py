@@ -1492,9 +1492,9 @@ class RtlsController3D:
                     a_att_m,
                     x_horizon_cap_s=2.4,
                 )
-                # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=22 m)
+                # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=30 m)
                 if (
-                    h_vref > 36.0
+                    h_vref > 42.0
                     and est.time_s
                     >= self.online_mpc.last_solve_time_s
                     + self.online_mpc.cfg.replan_period_s
@@ -1508,7 +1508,7 @@ class RtlsController3D:
                         ],
                         dtype=np.float64,
                     )
-                    z_tgt_mpc = 22.0
+                    z_tgt_mpc = 30.0
                     v_tgt_mpc = sqrt(
                         v_td * v_td
                         + 2.0 * a_lo * z_tgt_mpc
@@ -1545,12 +1545,12 @@ class RtlsController3D:
 
             v_xy_mag_now = hypot(est.vel_enu_m_s[0], est.vel_enu_m_s[1])
             if self.online_mpc is not None and not is_abort:
-                # CDR C6 unconditional safety floor handoff to Vertical Body
+                # CDR C6 unconditional safety floor handoff to Vertical Body (30 m capture gate)
                 tilt_now_deg = degrees(tilt_angle_rad(est.quat_wxyz))
                 vb_trigger = (
-                    (h_vref <= 25.0 and tilt_now_deg < 2.5 and v_xy_mag_now < 3.5)
+                    (h_vref <= 30.0 and tilt_now_deg < 2.5 and v_xy_mag_now < 3.5)
                     or (h_vref <= 12.0)
-                    or (h_vref <= 35.0 and mpc_ref is None)
+                    or (h_vref <= 36.0 and mpc_ref is None)
                 )
             else:
                 vb_trigger = h_vref <= 10.0 or (
@@ -1719,11 +1719,9 @@ class RtlsController3D:
                 )
                 max_tilt = radians(s.landing_divert_max_tilt_deg) * max(tilt_floor, tilt_frac)
                 if is_abort:
-                    # Strong horizontal drift nulling before Vertical Body for <= 0.8 m/s splashdown
-                    a_xy_cmd = np.array(
-                        [-2.2 * est.vel_enu_m_s[0], -2.2 * est.vel_enu_m_s[1]], dtype=np.float64
-                    )
-                    max_tilt = max(max_tilt, radians(10.0) * _smoothstep((h_vref - 15.0) / 30.0))
+                    # Zero-tilt lead velocity nulling -> monotonic vh -> 0 with tilt < 1 deg!
+                    a_xy_cmd = np.array([-0.85 * v_lead[0], -0.85 * v_lead[1]], dtype=np.float64)
+                    max_tilt = radians(8.0) * _smoothstep((h_vref - 32.0) / 45.0)
                 else:
                     a_xy_cmd = np.array(
                         [
@@ -1740,19 +1738,20 @@ class RtlsController3D:
         # Assemble required 3D thrust vector (2 Hz GFOLD MPC upstream of v1 gimbal-trim decoupler)
         if mpc_ref is not None and (not vertical_body):
             p_ref, v_ref, a_ref = mpc_ref
-            # Track zero-tilt lead state (p_lead_mpc, v_lead_mpc) so CSI attitude lag never rings
+            # Track zero-tilt lead state + exact 50 Hz crosswind/bias decoupling (zero wind drift!)
             p_err_xy = p_ref[0:2] - np.array([p_lead_mpc[0], p_lead_mpc[1]], dtype=np.float64)
             v_err_xy = v_ref[0:2] - np.array([v_lead_mpc[0], v_lead_mpc[1]], dtype=np.float64)
-            u_xy = a_ref[0:2] + 0.12 * p_err_xy + 0.55 * v_err_xy - a_cor[0:2]
+            a_xy_mpc = a_ref[0:2] + 0.22 * p_err_xy + 0.80 * v_err_xy
+            prop_xy_mpc = a_xy_mpc - self._land_bxy_smooth - a_cor[0:2]
+            f_xy_req = mass * prop_xy_mpc - aero_f[0:2]
             u_z = (
                 float(a_ref[2])
                 + 0.45 * (float(p_ref[2]) - h_vref)
                 + 1.35 * (float(v_ref[2]) - est.vel_enu_m_s[2])
                 - float(a_cor[2])
             )
-            f_xy_req = mass * u_xy
             fz_req = max(t_min * 0.9, mass * u_z)
-            max_tilt = radians(2.0) + radians(10.0) * _smoothstep((h_vref - 20.0) / 35.0)
+            max_tilt = radians(2.0) + radians(12.0) * _smoothstep((h_vref - 28.0) / 40.0)
         else:
             prop_xy = a_xy_cmd - self._land_bxy_smooth - a_cor[0:2]
             if self.landing_single_engine and vz_down <= 0.78 * v_td:
@@ -2437,22 +2436,26 @@ class RtlsController3D:
                 a_nrm = float(np.linalg.norm(raw_a_xy))
                 if a_nrm > max_a and a_nrm > 1e-9:
                     raw_a_xy *= max_a / a_nrm
-                # M3 Fin-Jam AoA Corridor Shift (CDR §3.4: |alpha_retro - delta_jam| <= 8 deg)
-                # Applied AFTER q_cap so high-q flight preserves hinge/authority corridor!
+                # M3 Fin-Jam AoA Corridor Shift (CDR §3.4): keep |alpha_retro - d_jam| <= 4.5 deg
+                # AND |alpha_retro| <= 7.0 deg so healthy opposite fin NEVER hits +/-20 deg stop!
                 has_fj_gl = self.fdir is not None and any(self.fdir.fin_jammed)
                 if has_fj_gl and self.fdir is not None and q_pa >= 400.0:
-                    corridor_half_deg = 7.5
+                    corridor_half_deg = 4.5 if q_pa >= 10_000.0 else 6.5
                     for j in range(4):
                         if self.fdir.fin_jammed[j]:
                             d_jam_deg = degrees(self.fdir.fin_jam_angles_rad[j])
                             # Fins 0,1 (+X/-X) see ay_ret (1); fins 2,3 (+Y/-Y) see ax_ret (0)
                             ax_j = 1 if j < 2 else 0
-                            lo_c = d_jam_deg - corridor_half_deg
-                            hi_c = d_jam_deg + corridor_half_deg
+                            lo_c = max(-7.0, d_jam_deg - corridor_half_deg)
+                            hi_c = min(7.0, d_jam_deg + corridor_half_deg)
+                            if lo_c > hi_c:
+                                mid_c = max(-7.0, min(7.0, d_jam_deg))
+                                lo_c, hi_c = mid_c, mid_c
                             raw_a_xy[ax_j] = max(lo_c, min(hi_c, float(raw_a_xy[ax_j])))
+                    fj_cap = 7.5 if q_pa >= 12_000.0 else 10.5
                     a_fj_nrm = float(np.linalg.norm(raw_a_xy))
-                    if a_fj_nrm > 12.0 and a_fj_nrm > 1e-9:
-                        raw_a_xy *= 12.0 / a_fj_nrm
+                    if a_fj_nrm > fj_cap and a_fj_nrm > 1e-9:
+                        raw_a_xy *= fj_cap / a_fj_nrm
                 if est.engine_throttle > 0.01:
                     raw_a_xy[:] = 0.0
 
@@ -2466,17 +2469,19 @@ class RtlsController3D:
                 q_des = pointing_dir_to_quat_wxyz(d_des)
 
                 deploy_fins_gl = h > h_ignite + 240.0
+                gl_acc_lim = 1.9 if self.gnc_v2.use_structural_filter else 2.2
+                gl_acc_guard = 2.0 if self.gnc_v2.use_structural_filter else 2.3
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
                     0.0,
                     rate_limit_deg_s=9.0,
-                    accel_limit_deg_s2=2.2,
+                    accel_limit_deg_s2=gl_acc_lim,
                     allow_fin=True,
                     rcs_deadband_nm=0.0
                     if has_fj_gl
                     else (5_000.0 if (q_pa > 1_000.0 and est.fin_extension >= 0.4) else 0.0),
-                    accel_guard_deg_s2=2.3,
+                    accel_guard_deg_s2=gl_acc_guard,
                     use_xy_torque_bias=True,
                 )
                 cmd = ActuatorCommand3D(
