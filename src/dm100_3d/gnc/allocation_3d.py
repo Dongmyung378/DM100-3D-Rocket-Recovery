@@ -313,9 +313,9 @@ class PriorityControlAllocator3D:
                         cur_j = float(inp.current_fin_deflection_rad[j])
                         df_lead = float(u_sol[j]) - cur_j
                         lo_j, hi_j = bounds_4[j]
-                        if el_j <= 0.36 and abs(df_lead) > radians(0.30):
-                            lead_taper = max(0.0, min(1.0, (0.36 - el_j) / 0.14))
-                            lead_gain = 1.0 + 0.65 * lead_taper
+                        if el_j <= 0.45 and abs(df_lead) > radians(0.30):
+                            lead_taper = max(0.0, min(1.0, (0.45 - el_j) / 0.15))
+                            lead_gain = 1.0 + 0.70 * lead_taper
                             u_cmd_j = max(lo_j, min(hi_j, cur_j + lead_gain * df_lead))
                             fin_cmd[j] = u_cmd_j
                         else:

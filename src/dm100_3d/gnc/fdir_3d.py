@@ -98,6 +98,7 @@ class CausalFdir3D:
         self.fin_jam_angles_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._fin_jam_pos_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._fin_jam_vel_rad_s: list[float] = [0.0, 0.0, 0.0, 0.0]
+        self._prev2_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_meas_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self._prev_fin_dm_rad: list[float] = [0.0, 0.0, 0.0, 0.0]
         self.mission_mode: str = "RTLS"
@@ -288,14 +289,20 @@ class CausalFdir3D:
                 max_lead = f_rate * dt
                 for j in range(4):
                     meas_j = float(pkt.fin_deflection_rad[j])
-                    dm_j = max(-max_lead, min(max_lead, meas_j - self._prev_fin_meas_rad[j]))
+                    prev1_j = self._prev_fin_meas_rad[j]
+                    prev2_j = self._prev2_fin_meas_rad[j]
+                    dm_j = max(-max_lead, min(max_lead, meas_j - prev1_j))
+                    dm2_j = max(-2.0 * max_lead, min(2.0 * max_lead, meas_j - prev2_j))
                     prev_dm_j = self._prev_fin_dm_rad[j]
+                    self._prev2_fin_meas_rad[j] = prev1_j
                     self._prev_fin_meas_rad[j] = meas_j
                     self._prev_fin_dm_rad[j] = dm_j
                     if self.fin_jammed[j]:
-                        # Causal 2-state alpha-beta tracker separates filtered position from
-                        # delay-compensated velocity lead so active runaway tracks smoothly and
-                        # hard-stop arrival immediately zeroes lead with ZERO overshoot tail!
+                        # Zero-windup causal 2-step velocity lead tracker:
+                        # - Uses 2-step slope (dm2 / 2dt) for 2x noise rejection & zero windup.
+                        # - Requires both 1-step (|dm|>=0.24 deg) & 2-step (|dm2|>=0.42 deg)
+                        #   same-sign motion so hard-stop arrival IMMEDIATELY zeroes lead with
+                        #   zero overshoot spike or tail!
                         el_fj = (
                             pkt.time_s - self.fin_jam_detected_time_s
                             if self.fin_jam_detected_time_s is not None
@@ -303,8 +310,9 @@ class CausalFdir3D:
                         )
                         v_cur = self._fin_jam_vel_rad_s[j]
                         is_moving = (
-                            el_fj <= 0.45
-                            and abs(dm_j) >= radians(0.18)
+                            el_fj <= 0.48
+                            and abs(dm_j) >= radians(0.24)
+                            and abs(dm2_j) >= radians(0.42)
                             and (
                                 (abs(v_cur) > radians(6.0) and (dm_j * v_cur) > 0.0)
                                 or (
@@ -315,19 +323,21 @@ class CausalFdir3D:
                             )
                         )
                         if is_moving:
-                            pred_p = self._fin_jam_pos_rad[j] + v_cur * dt
-                            innov = meas_j - pred_p
-                            pos_new = max(-f_lim, min(f_lim, pred_p + 0.65 * innov))
-                            v_new = max(-f_rate, min(f_rate, v_cur + (0.45 / dt) * innov))
-                            self._fin_jam_pos_rad[j] = pos_new
+                            v_inst = max(-f_rate, min(f_rate, 0.5 * dm2_j / dt))
+                            v_new = (
+                                0.55 * v_cur + 0.45 * v_inst
+                                if abs(v_cur) > radians(6.0)
+                                else v_inst
+                            )
+                            self._fin_jam_pos_rad[j] = meas_j
                             self._fin_jam_vel_rad_s[j] = v_new
-                            lead_t = min(1.65, 0.80 + 0.80 * self.total_delay_steps) * dt
+                            lead_t = min(2.10, 1.05 + 0.95 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
-                                -f_lim, min(f_lim, pos_new + v_new * lead_t)
+                                -f_lim, min(f_lim, meas_j + v_new * lead_t)
                             )
                         else:
                             self._fin_jam_vel_rad_s[j] = 0.0
-                            alpha_p = 0.60 if el_fj <= 0.55 else 0.18
+                            alpha_p = 0.65 if el_fj <= 0.58 else 0.18
                             pos_new = max(
                                 -f_lim,
                                 min(
@@ -362,7 +372,7 @@ class CausalFdir3D:
                             v0 = (dm_j / dt) if abs(dm_j) > radians(0.22) else 0.0
                             v0 = max(-f_rate, min(f_rate, v0))
                             self._fin_jam_vel_rad_s[j] = v0
-                            lead_t0 = min(1.65, 0.80 + 0.80 * self.total_delay_steps) * dt
+                            lead_t0 = min(2.10, 1.05 + 0.95 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + v0 * lead_t0)
                             )
@@ -372,7 +382,9 @@ class CausalFdir3D:
                         self._fin_err_count[j] = 0
             else:
                 for j in range(4):
-                    self._prev_fin_meas_rad[j] = float(pkt.fin_deflection_rad[j])
+                    m_cur = float(pkt.fin_deflection_rad[j])
+                    self._prev2_fin_meas_rad[j] = m_cur
+                    self._prev_fin_meas_rad[j] = m_cur
                 self._fin_err_count = [0, 0, 0, 0]
 
         return self.status()

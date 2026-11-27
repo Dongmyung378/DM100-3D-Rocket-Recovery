@@ -1546,11 +1546,15 @@ class RtlsController3D:
                     est.vel_enu_m_s[0] + a_now_xy[0] * tau_lead_mpc,
                     est.vel_enu_m_s[1] + a_now_xy[1] * tau_lead_mpc,
                 )
-                # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=30 m)
-                if h_vref <= 40.0:
+                # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=30 m);
+                # when a severe EO/blackout leaves r_xy >= 4.0 m at h=40 m, keep MPC active down
+                # to h=22 m (z_tgt=15 m) so terminal centering finishes smoothly inside MPC
+                # instead of discontinuously jumping to v1 guidance!
+                r_xy_pre = hypot(est.pos_enu_m[0], est.pos_enu_m[1])
+                if (h_vref <= 40.0 and r_xy_pre < 4.0) or h_vref <= 22.0:
                     self._mpc_terminal_latched = True
                 if (
-                    h_vref > 40.0
+                    h_vref > 22.0
                     and (not self._mpc_terminal_latched)
                     and est.time_s
                     >= self.online_mpc.last_solve_time_s
@@ -1565,7 +1569,7 @@ class RtlsController3D:
                         ],
                         dtype=np.float64,
                     )
-                    z_tgt_mpc = 30.0
+                    z_tgt_mpc = 30.0 if h_vref > 42.0 else max(14.0, h_vref - 12.0)
                     v_tgt_mpc = min(
                         sqrt(
                             v_td * v_td
@@ -1613,18 +1617,17 @@ class RtlsController3D:
             r_xy_now = hypot(est.pos_enu_m[0], est.pos_enu_m[1])
             if self.online_mpc is not None and not is_abort:
                 # CDR C6 unconditional safety floor handoff to Vertical Body (30 m capture gate);
-                # when a severe EO/blackout leaves r_xy >= 4.5 m at 30 m, let zero-tilt guidance
-                # finish pad centering down to h = 12..22 m instead of prematurely locking 2.4 deg.
+                # keeps MPC smoothly active down to h=14..22 m only if r_xy >= 4.0 m after EO.
                 tilt_now_deg = degrees(tilt_angle_rad(est.quat_wxyz))
                 vb_trigger = (
                     (
                         h_vref <= 30.0
                         and tilt_now_deg < 2.5
                         and v_xy_mag_now < 3.5
-                        and r_xy_now < 4.5
+                        and r_xy_now < 4.0
                     )
-                    or (h_vref <= 12.0)
-                    or (h_vref <= 22.0 and mpc_ref is None and r_xy_now < 6.0)
+                    or (h_vref <= 14.0)
+                    or (h_vref <= 36.0 and mpc_ref is None)
                 )
             else:
                 vb_trigger = h_vref <= 10.0 or (
