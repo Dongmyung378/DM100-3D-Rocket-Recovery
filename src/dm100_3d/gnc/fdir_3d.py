@@ -65,7 +65,7 @@ class CausalFdir3D:
         action_delay_steps: int = 0,
         restart_ignition_delay_s: float = 0.20,
         chamber_p_tau_s: float = 0.030,
-        rtls_min_prop_reserve_kg: float = 11_400.0,
+        rtls_min_prop_reserve_kg: float = 9_000.0,
     ) -> None:
         self.vehicle = vehicle
         self.dt_s = float(control_dt_s)
@@ -76,6 +76,7 @@ class CausalFdir3D:
 
         # Delayed command FIFO so expected engine/fin models align with measurement_time_s
         self._cmd_fifo: deque[ActuatorCommand3D] = deque(maxlen=max(8, self.total_delay_steps + 4))
+        self._prev2_fin_hat = np.zeros(4, dtype=np.float64)
         self._prev_fin_hat = np.zeros(4, dtype=np.float64)
         self._fin_hat = np.zeros(4, dtype=np.float64)
         self._fin_err_count = [0, 0, 0, 0]
@@ -128,6 +129,7 @@ class CausalFdir3D:
             self._last_meas_t = pkt.measurement_time_s
             self._fin_hat[:] = np.asarray(pkt.fin_deflection_rad, dtype=np.float64)
             self._prev_fin_hat[:] = self._fin_hat
+            self._prev2_fin_hat[:] = self._fin_hat
             return self.status()
 
         dt = max(0.0, pkt.measurement_time_s - self._last_meas_t)
@@ -243,13 +245,21 @@ class CausalFdir3D:
             f_rate = radians(self.vehicle.fins.deflection_rate_deg_s)
             f_tau = self.vehicle.fins.actuator_time_constant_s
             f_lim = radians(self.vehicle.fins.deflection_limit_deg)
-            # Resolver has 1-step lag, so compare measurement against previous-step prediction
+            # 3-deep lag window handles 1-step resolver lag + sub-stepping at 60 deg/s slew!
+            prev2_pred = self._prev2_fin_hat.copy()
             prev_pred = self._prev_fin_hat.copy()
+            self._prev2_fin_hat[:] = self._prev_fin_hat
             self._prev_fin_hat[:] = self._fin_hat
+            # Match plant 2x sub-stepping discretization (dt/2) for exact slew tracking
+            dt_half = 0.5 * dt
+            alpha_f = 1.0 - exp(-dt_half / f_tau)
             for j in range(4):
-                df = float(cmd.fin_deflection_rad[j]) - float(self._fin_hat[j])
-                step_f = max(-f_rate * dt, min(f_rate * dt, df * (1.0 - exp(-dt / f_tau))))
-                self._fin_hat[j] = max(-f_lim, min(f_lim, float(self._fin_hat[j]) + step_f))
+                v_f = float(self._fin_hat[j])
+                for _ in range(2):
+                    df = float(cmd.fin_deflection_rad[j]) - v_f
+                    step_f = max(-f_rate * dt_half, min(f_rate * dt_half, df * alpha_f))
+                    v_f = max(-f_lim, min(f_lim, v_f + step_f))
+                self._fin_hat[j] = v_f
 
             om_z_now = float(pkt.omega_body_rad_s[2])
             roll_kick_deg_s2 = (
@@ -259,24 +269,29 @@ class CausalFdir3D:
             )
             self._prev_omega_z = om_z_now
 
-            if (not pkt.upper_attached) and pkt.fin_extension >= 0.40:
-                # 0.85 deg (8.5-sigma above 0.10 deg resolver noise) x 2 steps (40 ms),
-                # OR 1-step (20 ms) when corroborated by > 6 deg/s^2 roll kick at high q!
-                thresh = radians(0.85)
-                thresh_fast = radians(1.0)
+            # Monitor only once fins are fully deployed (>= 0.90) to avoid entry-burn unfolding
+            if (not pkt.upper_attached) and pkt.fin_extension >= 0.90:
                 for j in range(4):
                     meas_j = float(pkt.fin_deflection_rad[j])
                     if self.fin_jammed[j]:
                         # Track real-time jammed fin angle immediately without smoothing lag
                         self.fin_jam_angles_rad[j] = meas_j
                         continue
-                    err_j = abs(meas_j - float(prev_pred[j]))
-                    err_cur = abs(meas_j - float(self._fin_hat[j]))
-                    err_min = min(err_j, err_cur)
+                    slew_step_j = max(
+                        abs(float(self._fin_hat[j]) - float(prev_pred[j])),
+                        abs(float(prev_pred[j]) - float(prev2_pred[j])),
+                    )
+                    err_min = min(
+                        abs(meas_j - float(prev2_pred[j])),
+                        abs(meas_j - float(prev_pred[j])),
+                        abs(meas_j - float(self._fin_hat[j])),
+                    )
+                    thresh = max(radians(1.5), 1.5 * slew_step_j)
+                    thresh_fast = max(radians(1.6), 1.5 * slew_step_j)
                     if err_min > thresh:
                         self._fin_err_count[j] += 1
-                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 6.0)
-                        if self._fin_err_count[j] >= 2 or fast_corrob:
+                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 8.0)
+                        if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
                             self.fin_jam_angles_rad[j] = meas_j
                             if self.fin_jam_detected_time_s is None:

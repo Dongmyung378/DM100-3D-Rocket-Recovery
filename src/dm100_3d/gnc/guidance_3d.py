@@ -1653,7 +1653,8 @@ class RtlsController3D:
                     else ((-p_xy / r_xy) * closing if r_xy > 1e-4 else np.zeros(2))
                 )
                 if is_abort:
-                    vb_dir_xy = np.zeros(2, dtype=np.float64)
+                    # Keep gentle wind-trim in ocean abort so surface wind cannot push vh > 0.8 m/s
+                    vb_dir_xy = self._vb_wind_trim_xy * wt_taper
                 k_vb = 3.2 + 0.8 * _smoothstep((h_vref - 1.5) / 4.0)
                 a_xy_cmd = k_vb * (des_v_xy - v_xy)
                 a_nrm = float(np.linalg.norm(a_xy_cmd))
@@ -1718,9 +1719,11 @@ class RtlsController3D:
                 )
                 max_tilt = radians(s.landing_divert_max_tilt_deg) * max(tilt_floor, tilt_frac)
                 if is_abort:
+                    # Strong horizontal drift nulling before Vertical Body for <= 0.8 m/s splashdown
                     a_xy_cmd = np.array(
-                        [-0.9 * est.vel_enu_m_s[0], -0.9 * est.vel_enu_m_s[1]], dtype=np.float64
+                        [-2.2 * est.vel_enu_m_s[0], -2.2 * est.vel_enu_m_s[1]], dtype=np.float64
                     )
+                    max_tilt = max(max_tilt, radians(10.0) * _smoothstep((h_vref - 15.0) / 30.0))
                 else:
                     a_xy_cmd = np.array(
                         [

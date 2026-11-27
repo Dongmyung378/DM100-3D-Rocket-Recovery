@@ -358,6 +358,43 @@ def test_causal_fdir_zero_false_positives_and_isolation() -> None:
     sym_mask, n_eng = fdir_eo.select_3eng_mask()
     assert n_eng == 3 and not sym_mask[3]
 
+    # Phase B2: Healthy 55 deg/s fin slew (+20 -> 0 deg) with 1-step resolver lag -> ZERO false FJ!
+    fdir_slew = CausalFdir3D(vehicle=cfg)
+    f_true = [radians(20.0)] * 4
+    f_prev_meas = list(f_true)
+    cmd_zero = ActuatorCommand3D(
+        phase="entry_burn", throttle_cmd=0.0, active_engines=0, fin_deflection_rad=(0.0,) * 4
+    )
+    for k in range(40):
+        t = k * 0.02
+        fdir_slew.record_command(cmd_zero)
+        st_s = fdir_slew.update(
+            pkt=_make_pkt(
+                t,
+                upper=False,
+                fin_ext=1.0,
+                fin_def=tuple(f_prev_meas),  # type: ignore[arg-type]
+                p7=(0.0,) * 7,
+                active_engines=0,
+            ),
+            q_pa=800.0,
+            vel_enu_m_s=(0.0, 0.0, -300.0),
+            pos_enu_m=(0.0, 0.0, 30_000.0),
+            accel_dist_world_m_s2=(0.0, 0.0, 0.0),
+            torque_bias_body_nm=(0.0, 0.0, 0.0),
+            mass_kg=10_000.0,
+        )
+        assert not any(st_s.fin_jammed_4), f"False Fin-Jam during healthy 55 deg/s slew at k={k}"
+        f_prev_meas = list(f_true)
+        # Plant 2x sub-stepped healthy fin motion toward 0 deg
+        for _ in range(2):
+            for j in range(4):
+                step_j = max(
+                    -radians(60.0) * 0.01,
+                    min(radians(60.0) * 0.01, (0.0 - f_true[j]) * (1.0 - np.exp(-0.01 / 0.08))),
+                )
+                f_true[j] += step_j
+
     # Phase C: Fin-Jam detection in 4 steps (80 ms) during glide
     fdir_fj = CausalFdir3D(vehicle=cfg)
     cmd_gl = ActuatorCommand3D(
