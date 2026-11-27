@@ -33,6 +33,7 @@ from dm100_3d.coords import (
 from dm100_3d.gnc.notch_filter import StructuralFilter3D
 from dm100_3d.interfaces import ActuatorCommand3D, TelemetryPacket3D
 from dm100_3d.physics import (
+    ENGINE_NOZZLE_XY_M,
     AtmosphereLUT,
     Wind3DLUT,
     compute_coriolis_and_centrifugal_3d,
@@ -828,12 +829,15 @@ class CausalEstimator3D:
         if dt <= 1e-5 or dt > 0.25:
             return
 
-        # Average executed RCS command over [prev_t, meas_t]
+        # Average executed RCS command & active engine mask over [prev_t, meas_t]
         rcs_avg = np.zeros(3, dtype=np.float64)
-        if self.command_history and pkt.rcs_propellant_kg > 0.0:
+        mask_exec: tuple[bool, ...] | None = None
+        if self.command_history:
             for end_t, cmd in reversed(self.command_history):
                 if end_t - self.control_dt_s <= pkt.measurement_time_s + 1e-9:
-                    rcs_avg = np.asarray(cmd.rcs_torque_nm, dtype=np.float64)
+                    if pkt.rcs_propellant_kg > 0.0:
+                        rcs_avg = np.asarray(cmd.rcs_torque_nm, dtype=np.float64)
+                    mask_exec = cmd.engine_mask_7
                     break
 
         om_mid = 0.5 * (prev[1] + om_b)
@@ -870,6 +874,18 @@ class CausalEstimator3D:
             cp_shift_m=srp_cp_mid,
         )
         tau_model = np.asarray(ft.torque_body_nm, dtype=np.float64)
+        if (
+            self.gnc_v2.use_fdir_v2
+            and mask_exec is not None
+            and ft.thrust_n > 1.0
+            and len(mask_exec) == 7
+        ):
+            active_idx = [i for i in range(7) if mask_exec[i]]
+            if active_idx:
+                t_per = ft.thrust_n / len(active_idx)
+                ax_t = sum(ENGINE_NOZZLE_XY_M[i][1] * t_per for i in active_idx)
+                ay_t = sum(-ENGINE_NOZZLE_XY_M[i][0] * t_per for i in active_idx)
+                tau_model = tau_model + np.array([ax_t, ay_t, 0.0], dtype=np.float64)
         if matched_dob and self._csi_dob_torque_filter is not None:
             # Matched DOB (CDR C1): filter model torque with identical H_filt as gyro omega
             tau_model = self._csi_dob_torque_filter.filter_sample(
@@ -899,6 +915,18 @@ class CausalEstimator3D:
                 r_c - float(self.torque_bias_body_nm[ax_i])
             )
             self.torque_bias_body_nm[ax_i] = max(-bounds[ax_i], min(bounds[ax_i], upd))
+
+    def reset_torque_bias_on_reconfig(
+        self, *, upper_attached: bool, reset_roll: bool = False
+    ) -> None:
+        """Clear stale pre-isolation torque bias & Matched-DOB SOS filter state on FDIR switch."""
+        if reset_roll:
+            self.torque_bias_body_nm[2] = 0.0
+        else:
+            self.torque_bias_body_nm[0:2] = 0.0
+            if self._csi_dob_torque_filter is not None:
+                self._csi_dob_torque_filter.reset((0.0, 0.0), upper_attached=upper_attached)
+        self._prev_ang_sample = None
 
     def reset_for_separation(
         self, p_new: NDArray[np.float64], v_new: NDArray[np.float64], time_s: float = 0.0

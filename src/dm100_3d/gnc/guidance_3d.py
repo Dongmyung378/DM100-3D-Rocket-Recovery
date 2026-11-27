@@ -13,7 +13,7 @@ Implements `ControllerProtocol3D` strictly causally (TelemetryPacket3D -> Actuat
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import asin, atan2, cos, degrees, exp, hypot, log, pi, radians, sin, sqrt
 
 import numpy as np
@@ -40,7 +40,9 @@ from dm100_3d.coords import (
     tilt_angle_rad,
 )
 from dm100_3d.gnc.allocation_3d import Allocation3DInput, PriorityControlAllocator3D
+from dm100_3d.gnc.fdir_3d import CausalFdir3D, FdirStatus3D
 from dm100_3d.gnc.mekf import CausalEstimator3D, EstimatedState3D, SensorConfig3D
+from dm100_3d.gnc.mpc_gfold_3d import OnlineGfoldMpc3D
 from dm100_3d.gnc.socp_gfold import (
     Gfold3DProblem,
     Gfold3DSolution,
@@ -221,6 +223,25 @@ class RtlsController3D:
         self.socp_plan_start_s: float = 0.0
         self.last_diag = GuidanceDiagnostics3D()
         self._was_upper_attached: bool = True
+        # M3 online 2 Hz log-mass GFOLD MPC & causal FDIR state (None when flags disabled)
+        self.fdir: CausalFdir3D | None = (
+            CausalFdir3D(
+                vehicle=self.vehicle,
+                control_dt_s=self.settings.control_dt_s,
+                observation_delay_steps=self.sensor_config.observation_delay_steps,
+                action_delay_steps=self.sensor_config.action_delay_steps,
+            )
+            if self.gnc_v2.use_fdir_v2
+            else None
+        )
+        self.online_mpc: OnlineGfoldMpc3D | None = (
+            OnlineGfoldMpc3D() if self.gnc_v2.use_online_mpc else None
+        )
+        self._fdir_status: FdirStatus3D | None = None
+        self._land_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
+        self._td_started_s: float | None = None
+        self._prev_eo_count: int = 0
+        self._prev_fj_count: int = 0
 
     def _nominal_mass(self, est: EstimatedState3D) -> float:
         return (
@@ -552,8 +573,9 @@ class RtlsController3D:
             else:
                 r_orb = EARTH_RADIUS_M + (z if z > 0.0 else 0.0)
                 a_cent_z = (vx * vx + vy * vy) / r_orb
-            ax = fx / mid_m - 2.0 * (om_y * vz - om_z * vy) + (bx if z < 14_000.0 else 0.0)
-            ay = fy / mid_m - 2.0 * (om_z * vx) + (by if z < 14_000.0 else 0.0)
+            bias_alt_m = 7_000.0 if self.gnc_v2.use_structural_filter else 14_000.0
+            ax = fx / mid_m - 2.0 * (om_y * vz - om_z * vy) + (bx if z < bias_alt_m else 0.0)
+            ay = fy / mid_m - 2.0 * (om_z * vx) + (by if z < bias_alt_m else 0.0)
             az = fz / mid_m - self._gravity(z) + 2.0 * om_y * vx + a_cent_z
             x += vx * step + 0.5 * ax * step * step
             y += vy * step + 0.5 * ay * step * step
@@ -672,6 +694,7 @@ class RtlsController3D:
         high_q_guard: bool = True,
         accel_guard_deg_s2: float = 3.5,
         use_xy_torque_bias: bool = False,
+        engine_mask_7: tuple[bool, ...] | None = None,
     ) -> tuple[tuple[float, float], tuple[float, float, float], tuple[float, float, float, float]]:
         """3-axis quaternion attitude controller -> PriorityControlAllocator3D (3x9)."""
         s = self.settings
@@ -792,6 +815,27 @@ class RtlsController3D:
         if not use_xy_torque_bias:
             tb[0] = 0.0
             tb[1] = 0.0
+        if (
+            self.fdir is not None
+            and any(self.fdir.fin_jammed)
+            and self.fdir.fin_jam_detected_time_s is not None
+            and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.65
+        ):
+            # Suppress Roll DOB during the 0.65 s 60 deg/s healthy-fin reconfiguration slew so
+            # 1-step resolver lag (~2.2 kNm fake residual) cannot wind up wrong-sign roll bias.
+            tb[2] = 0.0
+        # M3 causal asymmetric engine-offset moment feedforward (matches mekf.py tau_model +
+        # causal chamber-pressure spindown residual on recently isolated failed engines)
+        if self.fdir is not None and engine_mask_7 is not None and est.engine_throttle >= 1e-3:
+            t_asym = 0.5 * (cur_t + fut_t) if throttle_cmd > 1e-3 else cur_t
+            full_t_a, _ = compute_engine_thrust_3d(1.0, p_pa_a, self.vehicle)
+            if t_asym > 1.0 or full_t_a > 1.0:
+                asym_ff = self.fdir.causal_asymmetric_torque_ff_nm(
+                    engine_mask_7=engine_mask_7,
+                    total_thrust_n=t_asym,
+                    full_thrust_7_n=full_t_a,
+                )
+                btau_b = btau_b + np.asarray(asym_ff, dtype=np.float64)
         req_tau = i_vec * des_alpha + gyro_ff - btau_b - tb
         bg_tau = btau_b - gyro_ff + tb
 
@@ -813,6 +857,12 @@ class RtlsController3D:
         # torque and cos(alpha) lift projection so RCS seamlessly fills any true fin deficit).
         fin_tau0_exact: tuple[float, float, float] | None = None
         fin_eff_exact: tuple[float, float, float] | None = None
+        fin_jac_3x4: NDArray[np.float64] | None = None
+        fin_ref_def: tuple[float, float, float, float] | None = None
+        fin_ref_tau: tuple[float, float, float] | None = None
+        fin_jam_mask: tuple[bool, bool, bool, bool] | None = None
+        fin_jam_ang: tuple[float, float, float, float] | None = None
+        has_fin_jam = self.fdir is not None and any(self.fdir.fin_jammed)
         if (
             not est.upper_attached
             and est.fin_extension >= 0.05
@@ -838,22 +888,51 @@ class RtlsController3D:
                 )
                 return t_f
 
-            t_ref = _eval_fin((dy_ref, dy_ref, dx_ref, dx_ref))
-            t_yp = _eval_fin((dy_ref + u_fin, dy_ref + u_fin, dx_ref, dx_ref))
-            t_ym = _eval_fin((dy_ref - u_fin, dy_ref - u_fin, dx_ref, dx_ref))
-            t_pp = _eval_fin((dy_ref, dy_ref, dx_ref + u_fin, dx_ref + u_fin))
-            t_pm = _eval_fin((dy_ref, dy_ref, dx_ref - u_fin, dx_ref - u_fin))
-            t_rp = _eval_fin((dy_ref + u_fin, dy_ref - u_fin, dx_ref - u_fin, dx_ref + u_fin))
-            t_rm = _eval_fin((dy_ref - u_fin, dy_ref + u_fin, dx_ref + u_fin, dx_ref - u_fin))
-            eff_x = float(t_yp[0] - t_ym[0]) / (2.0 * u_fin)
-            eff_y = float(t_pp[1] - t_pm[1]) / (2.0 * u_fin)
-            eff_z = float(t_rp[2] - t_rm[2]) / (2.0 * u_fin)
-            fin_tau0_exact = (
-                float(t_ref[0]) - eff_x * dy_ref,
-                float(t_ref[1]) - eff_y * dx_ref,
-                float(t_ref[2]),
-            )
-            fin_eff_exact = (eff_x, eff_y, eff_z)
+            if has_fin_jam and self.fdir is not None:
+                # Exact per-column 3x4 Jacobian around ACTUAL operating fin angles (eliminates
+                # 14-deg linearization roll drift when healthy fins deflect far from feather!)
+                jam_m = tuple(self.fdir.fin_jammed)
+                jam_a = tuple(self.fdir.fin_jam_angles_rad)
+                f_lim_op = radians(self.vehicle.fins.deflection_limit_deg)
+                d_base = [
+                    jam_a[j]
+                    if jam_m[j]
+                    else max(-f_lim_op, min(f_lim_op, float(est.fin_deflection_rad[j])))
+                    for j in range(4)
+                ]
+                d_ref_t = (d_base[0], d_base[1], d_base[2], d_base[3])
+                t_ref = _eval_fin(d_ref_t)
+                jac = np.zeros((3, 4), dtype=np.float64)
+                for j in range(4):
+                    dp = list(d_base)
+                    dm = list(d_base)
+                    dp[j] += u_fin
+                    dm[j] -= u_fin
+                    tp = _eval_fin((dp[0], dp[1], dp[2], dp[3]))
+                    tm = _eval_fin((dm[0], dm[1], dm[2], dm[3]))
+                    jac[:, j] = (tp - tm) / (2.0 * u_fin)
+                fin_jac_3x4 = jac
+                fin_ref_def = d_ref_t
+                fin_ref_tau = (float(t_ref[0]), float(t_ref[1]), float(t_ref[2]))
+                fin_jam_mask = jam_m  # type: ignore[assignment]
+                fin_jam_ang = jam_a  # type: ignore[assignment]
+            else:
+                t_ref = _eval_fin((dy_ref, dy_ref, dx_ref, dx_ref))
+                t_yp = _eval_fin((dy_ref + u_fin, dy_ref + u_fin, dx_ref, dx_ref))
+                t_ym = _eval_fin((dy_ref - u_fin, dy_ref - u_fin, dx_ref, dx_ref))
+                t_pp = _eval_fin((dy_ref, dy_ref, dx_ref + u_fin, dx_ref + u_fin))
+                t_pm = _eval_fin((dy_ref, dy_ref, dx_ref - u_fin, dx_ref - u_fin))
+                t_rp = _eval_fin((dy_ref + u_fin, dy_ref - u_fin, dx_ref - u_fin, dx_ref + u_fin))
+                t_rm = _eval_fin((dy_ref - u_fin, dy_ref + u_fin, dx_ref + u_fin, dx_ref - u_fin))
+                eff_x = float(t_yp[0] - t_ym[0]) / (2.0 * u_fin)
+                eff_y = float(t_pp[1] - t_pm[1]) / (2.0 * u_fin)
+                eff_z = float(t_rp[2] - t_rm[2]) / (2.0 * u_fin)
+                fin_tau0_exact = (
+                    float(t_ref[0]) - eff_x * dy_ref,
+                    float(t_ref[1]) - eff_y * dx_ref,
+                    float(t_ref[2]),
+                )
+                fin_eff_exact = (eff_x, eff_y, eff_z)
 
         lever = cg - self.vehicle.geometry.nozzle_station_m
         fin_arm_z = self.vehicle.fins.station_m - cg
@@ -878,6 +957,22 @@ class RtlsController3D:
                 rcs_deadband_nm=rcs_deadband_nm,
                 fin_zero_torque_body_nm=fin_tau0_exact,
                 fin_axis_eff_nm_per_rad=fin_eff_exact,
+                fin_jacobian_3x4=fin_jac_3x4,
+                fin_ref_deflection_rad=fin_ref_def,
+                fin_ref_torque_body_nm=fin_ref_tau,
+                fin_jammed_mask=fin_jam_mask,
+                fin_jammed_angles_rad=fin_jam_ang,
+                current_fin_deflection_rad=(est.fin_deflection_rad if has_fin_jam else None),
+                fin_jam_elapsed_s=(
+                    max(0.0, est.time_s - self.fdir.fin_jam_detected_time_s)
+                    if (
+                        has_fin_jam
+                        and self.fdir is not None
+                        and self.fdir.fin_jam_detected_time_s is not None
+                    )
+                    else None
+                ),
+                vb_gimbal_max_step_deg=(1.0 if self.gnc_v2.use_structural_filter else 1.6),
             )
         )
         # Guard pre-separation RCS torque against lighter post-separation booster inertia
@@ -995,11 +1090,38 @@ class RtlsController3D:
         ) * s.control_dt_s + 0.05
         gauge_margin_kg = 85.0 if self.gnc_v2.use_strapdown_mekf else 0.0
         shutdown_res = full_flow * shutdown_delay + 20.0 + gauge_margin_kg
-        if (
-            est.main_propellant_kg <= ag.separation_min_main_propellant_kg + shutdown_res
-            or est.pos_enu_m[2] >= ag.separation_altitude_m + 0.75 * ag.separation_tolerance_m
-        ):
-            self.cutoff_pending = True
+        fdir_eo_ascent = self.fdir is not None and any(self.fdir.engine_failed)
+        is_abort_ascent = (
+            self.fdir is not None and self.fdir.mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT"
+        )
+        if is_abort_ascent:
+            sep_min_prop_target = 3_500.0
+            v_inert_now = float(np.linalg.norm(est.vel_enu_m_s))
+            if (
+                est.main_propellant_kg <= sep_min_prop_target + shutdown_res
+                or (v_inert_now >= 1_635.0 and est.pos_enu_m[2] >= 48_000.0)
+                or est.pos_enu_m[2] >= ag.separation_altitude_m + 18_000.0
+            ):
+                self.cutoff_pending = True
+        elif fdir_eo_ascent:
+            sep_min_prop_target = 9_500.0
+            v_inert_now = float(np.linalg.norm(est.vel_enu_m_s))
+            if (
+                est.main_propellant_kg <= sep_min_prop_target + shutdown_res
+                or (
+                    est.main_propellant_kg <= ag.separation_min_main_propellant_kg + shutdown_res
+                    and v_inert_now >= 1_635.0
+                )
+                or est.pos_enu_m[2] >= ag.separation_altitude_m + 0.75 * ag.separation_tolerance_m
+            ):
+                self.cutoff_pending = True
+        else:
+            sep_min_prop_target = ag.separation_min_main_propellant_kg
+            if (
+                est.main_propellant_kg <= ag.separation_min_main_propellant_kg + shutdown_res
+                or est.pos_enu_m[2] >= ag.separation_altitude_m + 0.75 * ag.separation_tolerance_m
+            ):
+                self.cutoff_pending = True
 
         # 3D Gravity Turn: pitch in XZ corridor + inertial zero-crossrange centering along Y
         flow_x = atan2(float(v_air[0]), max(float(v_air[2]), 1.0)) if speed > 20.0 else 0.0
@@ -1061,9 +1183,9 @@ class RtlsController3D:
                 pitch_x = dep * flow_x + dx_a * sc_a
                 pitch_y = dep * flow_y + dy_a * sc_a
 
-        time_to_res = (
-            est.main_propellant_kg - ag.separation_min_main_propellant_kg - shutdown_res
-        ) / max(full_flow, 1.0)
+        time_to_res = (est.main_propellant_kg - sep_min_prop_target - shutdown_res) / max(
+            full_flow, 1.0
+        )
         if (
             self.sep_align_started_s is None
             and est.vel_enu_m_s[2] > 100.0
@@ -1077,10 +1199,13 @@ class RtlsController3D:
             pitch_x += blend * (flow_x - pitch_x)
             pitch_y += blend * (flow_y - pitch_y)
 
+        ascent_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
         if self.cutoff_pending:
             pitch_x, pitch_y = flow_x, flow_y
             throttle = 0.0
             active_engines = 0
+            if self.fdir is not None:
+                ascent_mask_7 = (False, False, False, False, False, False, False)
         else:
             min_m = mass - 0.01 * self.vehicle.launch_mass_kg
             thrust = min(full_t, 3.55 * G0 * min_m / 1.03)
@@ -1102,7 +1227,11 @@ class RtlsController3D:
                 proj = float(d_vec @ v_air) / speed
                 if proj > 0.05:
                     thrust = min(thrust, max(0.0, mass * (des - free_v) / proj))
-            active_engines = self.vehicle.propulsion.engine_count
+            if self.fdir is not None:
+                ascent_mask_7 = self.fdir.healthy_ascent_mask()
+                active_engines = sum(1 for v in ascent_mask_7 if v)
+            else:
+                active_engines = self.vehicle.propulsion.engine_count
             throttle = self.vehicle.propulsion.quantize_throttle(
                 thrust / max(full_t, 1.0), active_engines
             )
@@ -1120,6 +1249,7 @@ class RtlsController3D:
             accel_limit_deg_s2=2.5,
             allow_fin=False,
             use_xy_torque_bias=(self.gnc_v2.use_structural_filter and (not est.on_pad)),
+            engine_mask_7=ascent_mask_7,
         )
         self.last_diag = GuidanceDiagnostics3D(
             phase="ascent",
@@ -1135,6 +1265,11 @@ class RtlsController3D:
             deploy_fins=False,
             deploy_gear=False,
             phase="ascent",
+            engine_mask_7=ascent_mask_7,
+            mission_mode=(self.fdir.mission_mode if self.fdir is not None else "RTLS"),
+            fdir_state=(
+                self._fdir_status.fdir_state if self._fdir_status is not None else "NOMINAL"
+            ),
         )
 
     def _landing_burn_guidance(
@@ -1175,7 +1310,11 @@ class RtlsController3D:
         h_shape = 680.0
         h_vref = max(0.0, h)
         h_c = min(h_vref, h_shape)
-        v_td = 0.50 if self.gnc_v2.use_strapdown_mekf else s.landing_touchdown_speed_m_s
+        v_td = (
+            0.40
+            if self.gnc_v2.use_online_mpc
+            else (0.50 if self.gnc_v2.use_strapdown_mekf else s.landing_touchdown_speed_m_s)
+        )
         v_stage_b_cap = sqrt(
             v_td * v_td
             + 2.0 * a_lo * h_vref
@@ -1183,12 +1322,33 @@ class RtlsController3D:
             + 2.0 * a_hi * max(0.0, h_vref - h_shape)
         )
 
+        is_abort = self.fdir is not None and self.fdir.mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT"
+        land_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
+        if self.fdir is not None and self._land_mask_7 is None:
+            self._land_mask_7, _ = self.fdir.select_3eng_mask()
+
+        # M3 FDIR Engine-Out mid-landing reconfiguration (CDR §3.4: 3->1 if h > h_stop_1 + 80 m,
+        # else hold 2-engine trimmed burn until h <= 250 m before forcing 2->1 touchdown)
+        if (
+            self.fdir is not None
+            and (not self.landing_single_engine)
+            and self._land_mask_7 is not None
+            and any(self._land_mask_7[i] and self.fdir.engine_failed[i] for i in range(7))
+        ):
+            h_stop_1 = vz_down * vz_down / (2.0 * max(a_max_1_net - 1.0, 2.0)) + 60.0
+            if h > h_stop_1 + 80.0 or h <= 250.0:
+                self.landing_single_engine = True
+            else:
+                self._land_mask_7, _ = self.fdir.select_3eng_mask(
+                    current_mask=self._land_mask_7, allow_2eng_trim=True
+                )
+
         # Monotone 3 -> 1 engine switch + one-shot Clarabel 3D GFOLD SOCP reference plan
         if not self.landing_single_engine and (
             vz_down <= min(s.landing_v_switch_m_s, v_stage_b_cap) or h <= 200.0
         ):
             self.landing_single_engine = True
-            if s.use_socp_reference and h > 30.0:
+            if s.use_socp_reference and (not is_abort) and h > 30.0:
                 prob = Gfold3DProblem(
                     pos0_enu_m=(est.pos_enu_m[0], est.pos_enu_m[1], max(h, 5.0)),
                     vel0_enu_m_s=(
@@ -1205,7 +1365,19 @@ class RtlsController3D:
                 self.socp_solution = solve_gfold_3d_socp(prob)
                 self.socp_plan_start_s = est.time_s
 
-        active_engines = 1 if self.landing_single_engine else 3
+        if self.fdir is not None:
+            if self.landing_single_engine:
+                land_mask_7, active_engines = self.fdir.select_1eng_mask()
+                self._land_mask_7 = land_mask_7
+            else:
+                assert self._land_mask_7 is not None
+                land_mask_7 = self._land_mask_7
+                active_engines = sum(1 for v in land_mask_7 if v)
+                if active_engines <= 0:
+                    land_mask_7, active_engines = self.fdir.select_1eng_mask()
+                    self._land_mask_7 = land_mask_7
+        else:
+            active_engines = 1 if self.landing_single_engine else 3
         t_min, _ = compute_engine_thrust_3d(
             self.vehicle.propulsion.throttle_bounds(active_engines)[0], p_pa, self.vehicle
         )
@@ -1257,6 +1429,7 @@ class RtlsController3D:
         a_avg_b = a_lo + 0.5 * (a_hi - a_lo) * min(h_vref / h_shape, 1.0)
         vertical_body = False
         vb_dir_xy = np.zeros(2, dtype=np.float64)
+        mpc_ref: tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]] | None = None
 
         if not self.landing_single_engine:
             v_sw = min(s.landing_v_switch_m_s, v_stage_b_cap)
@@ -1270,23 +1443,29 @@ class RtlsController3D:
                 min(2.85 * G0, (vz_down * vz_down - v_sw * v_sw) / (2.0 * dh)),
             )
             a_t_sm = max(t_min / mass, min(t_max / mass, az_net + g_loc))
-            p_lead, v_lead = predict_zero_tilt_state_3d(
-                (est.pos_enu_m[0], est.pos_enu_m[1]),
-                (est.vel_enu_m_s[0], est.vel_enu_m_s[1]),
-                (tilt_x, tilt_y),
-                (rate_tx, rate_ty),
-                a_t_sm,
-                radians(2.8),
-                x_horizon_cap_s=2.4,
-            )
-            t_align = max(3.2, t_go - 2.8)
-            a_xy_cmd = np.array(
-                [
-                    -6.5 * p_lead[0] / (t_align * t_align) - 5.5 * v_lead[0] / t_align,
-                    -6.5 * p_lead[1] / (t_align * t_align) - 5.5 * v_lead[1] / t_align,
-                ],
-                dtype=np.float64,
-            )
+            if is_abort:
+                # Downrange ocean splashdown abort: null horizontal drift only (no pad divert)
+                a_xy_cmd = np.array(
+                    [-0.45 * est.vel_enu_m_s[0], -0.45 * est.vel_enu_m_s[1]], dtype=np.float64
+                )
+            else:
+                p_lead, v_lead = predict_zero_tilt_state_3d(
+                    (est.pos_enu_m[0], est.pos_enu_m[1]),
+                    (est.vel_enu_m_s[0], est.vel_enu_m_s[1]),
+                    (tilt_x, tilt_y),
+                    (rate_tx, rate_ty),
+                    a_t_sm,
+                    radians(2.8),
+                    x_horizon_cap_s=2.4,
+                )
+                t_align = max(3.2, t_go - 2.8)
+                a_xy_cmd = np.array(
+                    [
+                        -6.5 * p_lead[0] / (t_align * t_align) - 5.5 * v_lead[0] / t_align,
+                        -6.5 * p_lead[1] / (t_align * t_align) - 5.5 * v_lead[1] / t_align,
+                    ],
+                    dtype=np.float64,
+                )
             a_xy_mag = float(np.linalg.norm(a_xy_cmd))
             if a_xy_mag > 7.5:
                 a_xy_cmd *= 7.5 / a_xy_mag
@@ -1303,16 +1482,122 @@ class RtlsController3D:
                 )
                 az_net = a_ff + k_v * (vz_down - v_stage_b_cap)
             az_net = max(-3.5, min(a_max_1_net, az_net))
+            a_t_sm = max(t_min / mass, min(t_max / mass, a_ff + g_loc - float(aero_f[2]) / mass))
+
+            # Causal sign-monotone 1st-order attitude-lag lead state for Online GFOLD MPC:
+            # projects actual current net horizontal acceleration (thrust tilt + aero + bias + Cor)
+            # over the CSI attitude loop lead horizon without `th_tr` false-reversal bias under
+            # strong opposing wind shear.
+            p_lead_mpc = (est.pos_enu_m[0], est.pos_enu_m[1])
+            v_lead_mpc = (est.vel_enu_m_s[0], est.vel_enu_m_s[1])
+            if (
+                self.online_mpc is not None
+                and (not self.in_vertical_body)
+                and (not is_abort)
+                and h_vref > 12.0
+            ):
+                tau_lead_mpc = (0.95 if self.gnc_v2.use_structural_filter else 0.55) * min(
+                    1.0, max(0.35, (h_vref - 25.0) / 80.0)
+                )
+                a_now_xy = (
+                    a_t_sm * sin(tilt_x)
+                    + float(aero_f[0]) / mass
+                    + float(self._land_bxy_smooth[0])
+                    + float(a_cor[0]),
+                    a_t_sm * sin(tilt_y)
+                    + float(aero_f[1]) / mass
+                    + float(self._land_bxy_smooth[1])
+                    + float(a_cor[1]),
+                )
+                p_lead_mpc = (
+                    est.pos_enu_m[0]
+                    + est.vel_enu_m_s[0] * tau_lead_mpc
+                    + 0.5 * a_now_xy[0] * (tau_lead_mpc * tau_lead_mpc),
+                    est.pos_enu_m[1]
+                    + est.vel_enu_m_s[1] * tau_lead_mpc
+                    + 0.5 * a_now_xy[1] * (tau_lead_mpc * tau_lead_mpc),
+                )
+                v_lead_mpc = (
+                    est.vel_enu_m_s[0] + a_now_xy[0] * tau_lead_mpc,
+                    est.vel_enu_m_s[1] + a_now_xy[1] * tau_lead_mpc,
+                )
+                # 2 Hz online N=12 log-mass GFOLD MPC targeting Vertical Body handoff (h=30 m)
+                if (
+                    h_vref > 40.0
+                    and est.time_s
+                    >= self.online_mpc.last_solve_time_s
+                    + self.online_mpc.cfg.replan_period_s
+                    - 1e-9
+                ):
+                    a_aero_est = aero_f / mass + np.array(
+                        [
+                            float(self._land_bxy_smooth[0]),
+                            float(self._land_bxy_smooth[1]),
+                            float(self._land_bz_smooth),
+                        ],
+                        dtype=np.float64,
+                    )
+                    z_tgt_mpc = 30.0
+                    v_tgt_mpc = sqrt(
+                        v_td * v_td
+                        + 2.0 * a_lo * z_tgt_mpc
+                        + ((a_hi - a_lo) / h_shape) * z_tgt_mpc * z_tgt_mpc
+                    )
+                    # Cap MPC planned thrust at smooth 1-engine tracking envelope (~72% max)
+                    # so GFOLD avoids cliff-dive bang-bang & leaves ample tracking headroom.
+                    t_max_mpc = max(
+                        t_min_1 + 25_000.0,
+                        min(t_max_1, mass * (g_loc + a_hi + 1.0)),
+                    )
+                    self.online_mpc.solve(
+                        time_s=est.time_s,
+                        pos0_enu_m=(p_lead_mpc[0], p_lead_mpc[1], h_vref),
+                        vel0_enu_m_s=(
+                            v_lead_mpc[0],
+                            v_lead_mpc[1],
+                            min(est.vel_enu_m_s[2], -0.5),
+                        ),
+                        mass0_kg=mass,
+                        dry_mass_kg=self.vehicle.booster_dry_mass_kg,
+                        t_min_n=t_min_1,
+                        t_max_n=t_max_mpc,
+                        isp_eff_s=self.vehicle.propulsion.sea_level_isp_s,
+                        gravity_m_s2=g_loc,
+                        v_touchdown_m_s=v_tgt_mpc,
+                        a_aero_now_enu_m_s2=(
+                            float(a_aero_est[0]),
+                            float(a_aero_est[1]),
+                            float(a_aero_est[2]),
+                        ),
+                        ground_effect_coeff=(
+                            self.gnc_v2.ground_effect_nominal_coeff
+                            if self.gnc_v2.use_ground_effect_feedforward
+                            else 0.0
+                        ),
+                        z_target_m=z_tgt_mpc,
+                    )
+                mpc_ref = self.online_mpc.sample_reference(est.time_s)
 
             v_xy_mag_now = hypot(est.vel_enu_m_s[0], est.vel_enu_m_s[1])
-            if h_vref <= 10.0 or (
-                h_vref <= s.landing_vertical_body_height_m and v_xy_mag_now <= 4.5
-            ):
+            if self.online_mpc is not None and not is_abort:
+                # CDR C6 unconditional safety floor handoff to Vertical Body (30 m capture gate)
+                tilt_now_deg = degrees(tilt_angle_rad(est.quat_wxyz))
+                vb_trigger = (
+                    (h_vref <= 30.0 and tilt_now_deg < 2.5 and v_xy_mag_now < 3.5)
+                    or (h_vref <= 12.0)
+                    or (h_vref <= 36.0 and mpc_ref is None)
+                )
+            else:
+                vb_trigger = h_vref <= 10.0 or (
+                    h_vref <= s.landing_vertical_body_height_m and v_xy_mag_now <= 4.5
+                )
+            if vb_trigger:
                 if not self.in_vertical_body:
                     self._vb_started_s = est.time_s
                 self.in_vertical_body = True
             vertical_body = self.in_vertical_body
-            a_t_sm = max(t_min / mass, min(t_max / mass, a_ff + g_loc - float(aero_f[2]) / mass))
+            if vertical_body:
+                mpc_ref = None
 
             if vertical_body:
                 lever = lever_trim
@@ -1337,14 +1622,24 @@ class RtlsController3D:
                 p_xy = np.array([est.pos_enu_m[0], est.pos_enu_m[1]], dtype=np.float64)
                 v_xy = np.array([est.vel_enu_m_s[0], est.vel_enu_m_s[1]], dtype=np.float64)
                 r_xy = float(np.linalg.norm(p_xy))
-                # Gentle off-pad centering lean (<= 2.45 deg, smoothly zeroed below h = 2.2 m)
-                p_stop_xy = p_xy + 0.95 * v_xy
-                r_stop = float(np.linalg.norm(p_stop_xy))
-                vb_mid_env = (
-                    _smoothstep((h_vref - 2.2) / 3.4)
-                    * _smoothstep((r_xy - 2.0) / 2.0)
-                    * _smoothstep((r_stop - 1.2) / 1.8)
-                )
+                # Gentle off-pad centering lean (<= 2.40 deg, smoothly zeroed before final braking;
+                # v2 CSI loop uses longer 2.4 s velocity lead & h > 5 m fade so body unwinds early)
+                if self.gnc_v2.use_structural_filter:
+                    p_stop_xy = p_xy + 2.40 * v_xy
+                    r_stop = float(np.linalg.norm(p_stop_xy))
+                    vb_mid_env = (
+                        _smoothstep((h_vref - 5.0) / 7.5)
+                        * _smoothstep((r_xy - 2.0) / 2.0)
+                        * _smoothstep((r_stop - 1.5) / 2.0)
+                    )
+                else:
+                    p_stop_xy = p_xy + 0.95 * v_xy
+                    r_stop = float(np.linalg.norm(p_stop_xy))
+                    vb_mid_env = (
+                        _smoothstep((h_vref - 2.2) / 3.4)
+                        * _smoothstep((r_xy - 2.0) / 2.0)
+                        * _smoothstep((r_stop - 1.2) / 1.8)
+                    )
                 th_vb_mid = -radians(0.75) * p_stop_xy * vb_mid_env
                 mid_nrm = float(np.linalg.norm(th_vb_mid))
                 if mid_nrm > radians(2.40) and mid_nrm > 1e-12:
@@ -1389,15 +1684,32 @@ class RtlsController3D:
                 ax_lim_rcs = (
                     0.90 * self.vehicle.propulsion.rcs_torque_limit_nm / max(lever * mass, 1.0)
                 )
-                v_ground_safe = 0.14 + 0.85 * ax_lim_rcs * max(t_rem - 0.25, 0.0)
-                v_deck_cap = 0.08 + 3.4 * _smoothstep((h_vref - 0.5) / 1.65)
-                closing = min(
-                    0.82 * r_xy,
-                    sqrt(2.0 * 0.85 * ax_lim_rcs * r_xy),
-                    v_ground_safe,
-                    v_deck_cap,
+                if self.gnc_v2.use_structural_filter:
+                    v_ground_safe = 0.10 + 0.65 * ax_lim_rcs * max(t_rem - 0.35, 0.0)
+                    v_deck_cap = 0.08 + 3.2 * _smoothstep((h_vref - 0.5) / 1.8)
+                    closing = min(
+                        0.65 * r_xy,
+                        sqrt(2.0 * 0.55 * ax_lim_rcs * r_xy),
+                        v_ground_safe,
+                        v_deck_cap,
+                    )
+                else:
+                    v_ground_safe = 0.14 + 0.85 * ax_lim_rcs * max(t_rem - 0.25, 0.0)
+                    v_deck_cap = 0.08 + 3.4 * _smoothstep((h_vref - 0.5) / 1.65)
+                    closing = min(
+                        0.82 * r_xy,
+                        sqrt(2.0 * 0.85 * ax_lim_rcs * r_xy),
+                        v_ground_safe,
+                        v_deck_cap,
+                    )
+                des_v_xy = (
+                    np.zeros(2, dtype=np.float64)
+                    if is_abort
+                    else ((-p_xy / r_xy) * closing if r_xy > 1e-4 else np.zeros(2))
                 )
-                des_v_xy = (-p_xy / r_xy) * closing if r_xy > 1e-4 else np.zeros(2)
+                if is_abort:
+                    # Keep gentle wind-trim in ocean abort so surface wind cannot push vh > 0.8 m/s
+                    vb_dir_xy = self._vb_wind_trim_xy * wt_taper
                 k_vb = 3.2 + 0.8 * _smoothstep((h_vref - 1.5) / 4.0)
                 a_xy_cmd = k_vb * (des_v_xy - v_xy)
                 a_nrm = float(np.linalg.norm(a_xy_cmd))
@@ -1410,7 +1722,11 @@ class RtlsController3D:
                 t_dec = max(0.0, vz_down - v_td) / a_dec_eff
                 t_rem_b = min(28.0, max(1.0, 0.5 * (t_kin + t_dec)))
                 t_align = max(2.75, t_rem_b - 3.85)
-                a_att_b = radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+                a_att_b = (
+                    radians(1.40)
+                    if self.gnc_v2.use_structural_filter
+                    else radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+                )
 
                 # Quasi-static 2-axis TVC aerodynamic trim:
                 #   tvc_tau = [lever*T*gx, -lever*T*gy, 0] cancels tau_aero_b_now
@@ -1447,7 +1763,7 @@ class RtlsController3D:
                     (rate_tx, rate_ty),
                     a_t_sm,
                     a_att_b,
-                    x_horizon_cap_s=2.4,
+                    x_horizon_cap_s=(3.0 if self.gnc_v2.use_structural_filter else 2.4),
                 )
                 r_err = max(hypot(est.pos_enu_m[0], est.pos_enu_m[1]), hypot(p_lead[0], p_lead[1]))
                 v_err = hypot(v_lead[0], v_lead[1])
@@ -1461,46 +1777,80 @@ class RtlsController3D:
                     + 0.24 * _smoothstep((v_err - 0.6) / 1.5)
                 )
                 max_tilt = radians(s.landing_divert_max_tilt_deg) * max(tilt_floor, tilt_frac)
-                a_xy_cmd = np.array(
-                    [
-                        -7.4 * p_lead[0] / (t_align * t_align) - 6.2 * v_lead[0] / t_align,
-                        -7.4 * p_lead[1] / (t_align * t_align) - 6.2 * v_lead[1] / t_align,
-                    ],
-                    dtype=np.float64,
-                )
+                if is_abort:
+                    # Zero-tilt lead velocity nulling -> monotonic vh -> 0 with tilt < 1 deg!
+                    a_xy_cmd = np.array([-0.85 * v_lead[0], -0.85 * v_lead[1]], dtype=np.float64)
+                    max_tilt = radians(8.0) * _smoothstep((h_vref - 32.0) / 45.0)
+                else:
+                    a_xy_cmd = np.array(
+                        [
+                            -7.4 * p_lead[0] / (t_align * t_align) - 6.2 * v_lead[0] / t_align,
+                            -7.4 * p_lead[1] / (t_align * t_align) - 6.2 * v_lead[1] / t_align,
+                        ],
+                        dtype=np.float64,
+                    )
                 max_lat = a_t_sm * sin(max_tilt)
                 a_nrm = float(np.linalg.norm(a_xy_cmd))
                 if a_nrm > max_lat and a_nrm > 1e-9:
                     a_xy_cmd *= max_lat / a_nrm
 
-        # Assemble required 3D thrust vector
-        prop_xy = a_xy_cmd - self._land_bxy_smooth - a_cor[0:2]
-        if self.landing_single_engine and vz_down <= 0.78 * v_td:
-            fz_req = t_min
+        # Assemble required 3D thrust vector (2 Hz GFOLD MPC upstream of v1 gimbal-trim decoupler)
+        if mpc_ref is not None and (not vertical_body):
+            p_ref, v_ref, a_ref = mpc_ref
+            # Track attitude-lead state + exact 50 Hz crosswind/bias decoupling (zero wind drift!)
+            p_err_xy = p_ref[0:2] - np.array([p_lead_mpc[0], p_lead_mpc[1]], dtype=np.float64)
+            v_err_xy = v_ref[0:2] - np.array([v_lead_mpc[0], v_lead_mpc[1]], dtype=np.float64)
+            a_xy_mpc = a_ref[0:2] + 0.35 * p_err_xy + 1.15 * v_err_xy
+            prop_xy_mpc = a_xy_mpc - self._land_bxy_smooth - a_cor[0:2]
+            f_xy_req = mass * prop_xy_mpc - aero_f[0:2]
+            u_z_mpc = (
+                float(a_ref[2])
+                + 0.45 * (float(p_ref[2]) - h_vref)
+                + 1.35 * (float(v_ref[2]) - est.vel_enu_m_s[2])
+                - float(a_cor[2])
+            )
+            # Smooth 75%/25% Stage-B vertical-corridor damping (eliminates both hover stall and
+            # late high-speed descent without discontinuous throttle ping-pong).
+            u_z_v1 = max(
+                t_min / mass,
+                (az_net + g_loc - b_z - float(a_cor[2])) - float(aero_f[2]) / mass,
+            )
+            u_z = 0.75 * u_z_mpc + 0.25 * u_z_v1
+            fz_req = max(t_min * 0.9, mass * u_z)
+            max_tilt = radians(2.0) + radians(9.5) * _smoothstep((h_vref - 32.0) / 55.0)
         else:
-            prop_z = az_net + g_loc - b_z - float(a_cor[2])
-            fz_req = max(t_min * 0.9, mass * prop_z - float(aero_f[2]))
-            if (
-                self.gnc_v2.use_ground_effect_feedforward
-                and self.landing_single_engine
-                and h < 18.0
-            ):
-                h_noz_est = h + (
-                    self.vehicle.geometry.nozzle_station_m
-                    - self.vehicle.landing_gear.foot_station_m
-                )
-                ge_ff = ground_effect_nominal_lift_n(
-                    nozzle_height_m=h_noz_est,
-                    thrust_n=max(t_min, fz_req),
-                    c_ge_nom=self.gnc_v2.ground_effect_nominal_coeff,
-                )
-                fz_req = max(t_min * 0.9, fz_req - ge_ff)
-        f_xy_req = mass * prop_xy - aero_f[0:2]
+            prop_xy = a_xy_cmd - self._land_bxy_smooth - a_cor[0:2]
+            if self.landing_single_engine and vz_down <= 0.78 * v_td:
+                fz_req = t_min
+            else:
+                prop_z = az_net + g_loc - b_z - float(a_cor[2])
+                fz_req = max(t_min * 0.9, mass * prop_z - float(aero_f[2]))
+                if (
+                    self.gnc_v2.use_ground_effect_feedforward
+                    and self.landing_single_engine
+                    and h < 18.0
+                ):
+                    h_noz_est = h + (
+                        self.vehicle.geometry.nozzle_station_m
+                        - self.vehicle.landing_gear.foot_station_m
+                    )
+                    ge_ff = ground_effect_nominal_lift_n(
+                        nozzle_height_m=h_noz_est,
+                        thrust_n=max(t_min, fz_req),
+                        c_ge_nom=self.gnc_v2.ground_effect_nominal_coeff,
+                    )
+                    fz_req = max(t_min * 0.9, fz_req - ge_ff)
+            f_xy_req = mass * prop_xy - aero_f[0:2]
 
         thrust_tilt_body_xy: tuple[float, float] | None = None
         if vertical_body:
             lever = max(cg - self.vehicle.geometry.nozzle_station_m, 1.0)
-            lat_lim = 0.85 * self.vehicle.propulsion.rcs_torque_limit_nm / lever
+            vb_lat_scale = (
+                _smoothstep((est.time_s - (self._vb_started_s or est.time_s)) / 0.45)
+                if self.gnc_v2.use_structural_filter
+                else 1.0
+            )
+            lat_lim = 0.85 * vb_lat_scale * self.vehicle.propulsion.rcs_torque_limit_nm / lever
             f_center = fz_req * np.array([sin(tilt_x), sin(tilt_y)], dtype=np.float64)
             df = f_xy_req - f_center
             df_nrm = float(np.linalg.norm(df))
@@ -1575,15 +1925,23 @@ class RtlsController3D:
             thrust_tilt_body_xy = None
 
         lit_thr = 0.5 * self.vehicle.propulsion.throttle_bounds(1)[0]
+        d_ret_lb = self._retro_dir(self._air_vel(est))
+        el_lb = est.time_s - (self.landing_started_s or est.time_s)
         if est.engine_throttle < lit_thr:
-            q_des = pointing_dir_to_quat_wxyz(self._retro_dir(self._air_vel(est)))
+            q_des = pointing_dir_to_quat_wxyz(d_ret_lb)
+        elif self.gnc_v2.use_structural_filter and el_lb < 0.75:
+            # Smoothly blend out of retrograde over 0.55 s so 3-engine divert step does not
+            # stack on top of the 0.15 s atmospheric ignition nozzle side-load pulse!
+            b_ign = _smoothstep((el_lb - 0.20) / 0.55)
+            d_u = dir_des / max(float(np.linalg.norm(dir_des)), 1e-9)
+            q_des = pointing_dir_to_quat_wxyz((1.0 - b_ign) * d_ret_lb + b_ign * d_u)
         else:
             q_des = pointing_dir_to_quat_wxyz(dir_des)
 
         land_rate_lim = 9.0
         if vertical_body and degrees(tilt_angle_rad(est.quat_wxyz)) < 2.9:
             if self.gnc_v2.use_structural_filter:
-                land_rate_lim = 0.35 + 5.65 * _smoothstep((h_vref - 0.40) / 2.0)
+                land_rate_lim = 0.22 + 5.78 * _smoothstep((h_vref - 0.65) / 3.1)
             else:
                 land_rate_lim = 0.25 + 5.75 * _smoothstep((h_vref - 0.65) / 3.1)
         vb_blend = (
@@ -1595,7 +1953,10 @@ class RtlsController3D:
         if vertical_body:
             land_acc_lim = vb_acc
         elif self.gnc_v2.use_structural_filter:
-            land_acc_lim = 2.20 + 0.85 * _smoothstep((est.engine_throttle - lit_thr) / 0.15)
+            ign_acc_ramp = _smoothstep((el_lb - 0.30) / 0.55)
+            land_acc_lim = 1.35 + 1.45 * ign_acc_ramp * _smoothstep(
+                (est.engine_throttle - lit_thr) / 0.15
+            )
         else:
             land_acc_lim = 3.05
 
@@ -1610,20 +1971,41 @@ class RtlsController3D:
             high_q_guard=False,
             accel_guard_deg_s2=land_acc_lim,
             use_xy_torque_bias=(not vertical_body) or self.gnc_v2.use_structural_filter,
+            engine_mask_7=land_mask_7,
         )
         if est.engine_throttle < lit_thr:
             gim = (0.0, 0.0)
 
+        mpc_used = self.online_mpc is not None and self.online_mpc.total_valid_solves > 0
+        mpc_ms = self.online_mpc.max_solve_ms if self.online_mpc is not None else 0.0
         self.last_diag = GuidanceDiagnostics3D(
             phase="landing_burn",
             tilt_target_deg=degrees(tilt_angle_rad(q_des)),
             roll_deg=degrees(roll_angle_rad(est.quat_wxyz)),
-            socp_solver_used=(self.socp_solution is not None and self.socp_solution.feasible),
-            socp_solver_status=(
-                self.socp_solution.status if self.socp_solution is not None else "unused"
+            socp_solver_used=(
+                mpc_used or (self.socp_solution is not None and self.socp_solution.feasible)
             ),
-            socp_solve_ms=(self.socp_solution.solve_ms if self.socp_solution is not None else 0.0),
-            extra={"active_engines": active_engines, "vertical_body": vertical_body},
+            socp_solver_status=(
+                "mpc_optimal"
+                if mpc_used
+                else (self.socp_solution.status if self.socp_solution is not None else "unused")
+            ),
+            socp_solve_ms=(
+                mpc_ms
+                if mpc_used
+                else (self.socp_solution.solve_ms if self.socp_solution is not None else 0.0)
+            ),
+            extra={
+                "active_engines": active_engines,
+                "vertical_body": vertical_body,
+                "mpc_solves": self.online_mpc.total_solves if self.online_mpc is not None else 0,
+                "mpc_valid_solves": (
+                    self.online_mpc.total_valid_solves if self.online_mpc is not None else 0
+                ),
+                "mpc_max_iter": (
+                    self.online_mpc.max_iterations if self.online_mpc is not None else 0
+                ),
+            },
         )
         return ActuatorCommand3D(
             throttle_cmd=throttle,
@@ -1634,6 +2016,13 @@ class RtlsController3D:
             deploy_fins=False,
             deploy_gear=(h <= s.gear_deploy_height_m),
             phase="landing_burn",
+            engine_mask_7=(
+                (False, False, False, False, False, False, False) if meco3 else land_mask_7
+            ),
+            mission_mode=(self.fdir.mission_mode if self.fdir is not None else "RTLS"),
+            fdir_state=(
+                self._fdir_status.fdir_state if self._fdir_status is not None else "NOMINAL"
+            ),
         )
 
     def step(self, telemetry: TelemetryPacket3D) -> ActuatorCommand3D:
@@ -1649,39 +2038,115 @@ class RtlsController3D:
 
         est = self.estimator.observe(telemetry)
 
-        # Phase 8: Touchdown Settle (immediate MECO + unpowered 5 s standing check)
+        # M3 Strictly Causal FDIR update (Engine-Out & Grid-Fin Jam)
+        if self.fdir is not None:
+            mass_f = self._nominal_mass(est)
+            _, _, rho_f = self.forecast_atmo.at(est.pos_enu_m[2])
+            v_air_f = self._air_vel(est)
+            q_f = 0.5 * rho_f * float(np.dot(v_air_f, v_air_f))
+            self._fdir_status = self.fdir.update(
+                pkt=telemetry,
+                q_pa=q_f,
+                vel_enu_m_s=est.vel_enu_m_s,
+                pos_enu_m=est.pos_enu_m,
+                accel_dist_world_m_s2=est.accel_bias_world_m_s2,
+                torque_bias_body_nm=est.torque_bias_body_nm,
+                mass_kg=mass_f,
+            )
+            eo_cnt = sum(1 for f in self.fdir.engine_failed if f)
+            if eo_cnt > self._prev_eo_count:
+                # Reset stale pre-isolation asymmetric disturbance torque bias & Matched-DOB SOS
+                # state immediately upon symmetric engine reconfiguration (no pitch rebound!).
+                self.estimator.reset_torque_bias_on_reconfig(upper_attached=est.upper_attached)
+                est = replace(est, torque_bias_body_nm=(0.0, 0.0, est.torque_bias_body_nm[2]))
+                self._prev_eo_count = eo_cnt
+            fj_cnt = sum(1 for f in self.fdir.fin_jammed if f)
+            if fj_cnt > self._prev_fj_count or (
+                fj_cnt > 0
+                and self.fdir.fin_jam_detected_time_s is not None
+                and (est.time_s - self.fdir.fin_jam_detected_time_s) <= 0.65
+            ):
+                # Keep Roll DOB clean across the 0.65 s 60 deg/s healthy-fin reconfiguration slew
+                # so resolver lag never charges wrong-sign roll bias into post-slew recovery!
+                self.estimator.reset_torque_bias_on_reconfig(
+                    upper_attached=est.upper_attached, reset_roll=True
+                )
+                est = replace(
+                    est,
+                    torque_bias_body_nm=(
+                        est.torque_bias_body_nm[0],
+                        est.torque_bias_body_nm[1],
+                        0.0,
+                    ),
+                )
+                self._prev_fj_count = fj_cnt
+
+        def _finish(cmd_out: ActuatorCommand3D) -> ActuatorCommand3D:
+            self.estimator.record_command(est.time_s, cmd_out)
+            if self.fdir is not None:
+                self.fdir.record_command(cmd_out)
+            return cmd_out
+
+        m_mode = self.fdir.mission_mode if self.fdir is not None else "RTLS"
+        f_state = self._fdir_status.fdir_state if self._fdir_status is not None else "NOMINAL"
+
+        # Phase 8: Touchdown Settle (immediate MECO + 5 s 4-leg upright settle)
         if est.touchdown_detected:
             self.phase = "touchdown_settle"
+            if self._td_started_s is None:
+                self._td_started_s = est.time_s
+            # In v2 sloped-pad landings, brief cold-gas nitrogen RCS rate damping during the first
+            # 3.5 s after MECO (strictly 0.0 during final 1.5 s passive standing check; main engine
+            # 100% OFF!) damps 2.5-deg sloped-pad leg rocking (Falcon 9 ASDS standard practice).
+            td_rcs = (0.0, 0.0, 0.0)
+            dt_td = est.time_s - self._td_started_s
+            if self.gnc_v2.use_online_mpc and dt_td <= 3.5 and est.rcs_propellant_kg > 0.0:
+                fade_td = 1.0 - _smoothstep((dt_td - 3.0) / 0.5)
+                k_td_damp = 900_000.0 * fade_td
+                td_lim = min(45_000.0, self.vehicle.propulsion.rcs_torque_limit_nm) * fade_td
+                td_rcs = (
+                    max(-td_lim, min(td_lim, -k_td_damp * float(est.omega_body_rad_s[0]))),
+                    max(-td_lim, min(td_lim, -k_td_damp * float(est.omega_body_rad_s[1]))),
+                    0.0,
+                )
             cmd = ActuatorCommand3D(
                 throttle_cmd=0.0,
                 active_engines=0,
                 gimbal_rad=(0.0, 0.0),
-                rcs_torque_nm=(0.0, 0.0, 0.0),
+                rcs_torque_nm=td_rcs,
                 fin_deflection_rad=(0.0, 0.0, 0.0, 0.0),
                 deploy_fins=True,
                 deploy_gear=True,
                 phase="touchdown_settle",
+                mission_mode=m_mode,
+                fdir_state=f_state,
             )
-            self.estimator.record_command(est.time_s, cmd)
+            mpc_used = self.online_mpc is not None and self.online_mpc.total_valid_solves > 0
+            mpc_ms = self.online_mpc.max_solve_ms if self.online_mpc is not None else 0.0
             self.last_diag = GuidanceDiagnostics3D(
                 phase="touchdown_settle",
                 roll_deg=degrees(roll_angle_rad(est.quat_wxyz)),
-                socp_solver_used=(self.socp_solution is not None and self.socp_solution.feasible),
+                socp_solver_used=(
+                    mpc_used or (self.socp_solution is not None and self.socp_solution.feasible)
+                ),
                 socp_solver_status=(
-                    self.socp_solution.status if self.socp_solution is not None else "unused"
+                    "mpc_optimal"
+                    if mpc_used
+                    else (self.socp_solution.status if self.socp_solution is not None else "unused")
                 ),
                 socp_solve_ms=(
-                    self.socp_solution.solve_ms if self.socp_solution is not None else 0.0
+                    mpc_ms
+                    if mpc_used
+                    else (self.socp_solution.solve_ms if self.socp_solution is not None else 0.0)
                 ),
             )
-            return cmd
+            return _finish(cmd)
 
         # Phase 1: Ascent
         if est.upper_attached:
             self.phase = "ascent"
             cmd = self._ascent_guidance(est)
-            self.estimator.record_command(est.time_s, cmd)
-            return cmd
+            return _finish(cmd)
 
         s = self.settings
         mass = self._nominal_mass(est)
@@ -1706,51 +2171,65 @@ class RtlsController3D:
 
         # Phase 2: Low-q 3-Axis RCS Flip
         if self.phase == "flip":
-            if self.flip_started_s is None:
-                if q_pa > s.flip_max_q_pa:
-                    v_air = self._air_vel(est)
-                    d_hold = v_air if est.vel_enu_m_s[2] > 0.0 else self._retro_dir(v_air, 260.0)
-                    q_des = pointing_dir_to_quat_wxyz(d_hold)
-                    gim, rcs, fins = self._attitude_allocate_3d(est, q_des, 0.0)
-                    cmd = ActuatorCommand3D(
-                        gimbal_rad=gim, rcs_torque_nm=rcs, fin_deflection_rad=fins, phase="flip"
-                    )
-                    self.estimator.record_command(est.time_s, cmd)
-                    return cmd
-                self.flip_started_s = est.time_s
-                self._plan_boostback_3d(est)
-
-            q_des = pointing_dir_to_quat_wxyz(
-                np.array([float(self.boost_dir_xy[0]), float(self.boost_dir_xy[1]), 0.0])
-            )
-            q_err = quat_multiply_wxyz(quat_conjugate_wxyz(est.quat_wxyz), q_des)
-            err_ang_deg = degrees(
-                2.0 * atan2(float(np.linalg.norm(q_err[1:4])), abs(float(q_err[0])))
-            )
-            om_mag_deg = degrees(float(np.linalg.norm(est.omega_body_rad_s)))
-            if err_ang_deg < 2.0 and om_mag_deg < 1.0:
-                self.phase = "boostback"
-                self.boost_started_s = est.time_s
-                self._plan_boostback_3d(est)
+            if m_mode == "DOWNRANGE_SPLASHDOWN_ABORT":
+                # Skip boostback completely in ocean abort mode -> align retrograde in coast
+                self.phase = "coast"
             else:
-                gim, rcs, fins = self._attitude_allocate_3d(
-                    est,
-                    q_des,
-                    0.0,
-                    rate_limit_deg_s=s.flip_rate_limit_deg_s,
-                    accel_limit_deg_s2=s.flip_accel_limit_deg_s2,
-                    high_q_guard=False,
+                if self.flip_started_s is None:
+                    if q_pa > s.flip_max_q_pa:
+                        v_air = self._air_vel(est)
+                        d_hold = (
+                            v_air if est.vel_enu_m_s[2] > 0.0 else self._retro_dir(v_air, 260.0)
+                        )
+                        q_des = pointing_dir_to_quat_wxyz(d_hold)
+                        gim, rcs, fins = self._attitude_allocate_3d(est, q_des, 0.0)
+                        cmd = ActuatorCommand3D(
+                            gimbal_rad=gim,
+                            rcs_torque_nm=rcs,
+                            fin_deflection_rad=fins,
+                            phase="flip",
+                            mission_mode=m_mode,
+                            fdir_state=f_state,
+                        )
+                        return _finish(cmd)
+                    self.flip_started_s = est.time_s
+                    self._plan_boostback_3d(est)
+
+                q_des = pointing_dir_to_quat_wxyz(
+                    np.array([float(self.boost_dir_xy[0]), float(self.boost_dir_xy[1]), 0.0])
                 )
-                cmd = ActuatorCommand3D(
-                    gimbal_rad=gim, rcs_torque_nm=rcs, fin_deflection_rad=fins, phase="flip"
+                q_err = quat_multiply_wxyz(quat_conjugate_wxyz(est.quat_wxyz), q_des)
+                err_ang_deg = degrees(
+                    2.0 * atan2(float(np.linalg.norm(q_err[1:4])), abs(float(q_err[0])))
                 )
-                self.estimator.record_command(est.time_s, cmd)
-                self.last_diag = GuidanceDiagnostics3D(
-                    phase="flip",
-                    tilt_target_deg=degrees(tilt_angle_rad(q_des)),
-                    roll_deg=degrees(roll_angle_rad(est.quat_wxyz)),
-                )
-                return cmd
+                om_mag_deg = degrees(float(np.linalg.norm(est.omega_body_rad_s)))
+                if err_ang_deg < 2.0 and om_mag_deg < 1.0:
+                    self.phase = "boostback"
+                    self.boost_started_s = est.time_s
+                    self._plan_boostback_3d(est)
+                else:
+                    gim, rcs, fins = self._attitude_allocate_3d(
+                        est,
+                        q_des,
+                        0.0,
+                        rate_limit_deg_s=s.flip_rate_limit_deg_s,
+                        accel_limit_deg_s2=s.flip_accel_limit_deg_s2,
+                        high_q_guard=False,
+                    )
+                    cmd = ActuatorCommand3D(
+                        gimbal_rad=gim,
+                        rcs_torque_nm=rcs,
+                        fin_deflection_rad=fins,
+                        phase="flip",
+                        mission_mode=m_mode,
+                        fdir_state=f_state,
+                    )
+                    self.last_diag = GuidanceDiagnostics3D(
+                        phase="flip",
+                        tilt_target_deg=degrees(tilt_angle_rad(q_des)),
+                        roll_deg=degrees(roll_angle_rad(est.quat_wxyz)),
+                    )
+                    return _finish(cmd)
 
         # Phase 3: 3-Engine 3D Boostback Burn (Restart #1)
         if self.phase == "boostback":
@@ -1772,12 +2251,16 @@ class RtlsController3D:
                         mass - 0.01 * self.vehicle.launch_mass_kg,
                     )
                     max_bb_t = s.boostback_max_load_g * G0 * min_m / 1.03
-                    lo3, _ = self.vehicle.propulsion.throttle_bounds(3)
+                    if self.fdir is not None:
+                        bb_mask_7, bb_eng = self.fdir.select_3eng_mask()
+                    else:
+                        bb_mask_7, bb_eng = None, 3
+                    lo3, _ = self.vehicle.propulsion.throttle_bounds(bb_eng)
                     bb_el = est.time_s - (self.boost_started_s or est.time_s)
                     ramp = _smoothstep((bb_el - 0.15) / 2.0)
                     bb_req = lo3 + ramp * max(0.0, s.boostback_throttle_total - lo3)
                     throttle = self.vehicle.propulsion.quantize_throttle(
-                        min(bb_req, max_bb_t / max(full_t, 1.0)), 3
+                        min(bb_req, max_bb_t / max(full_t, 1.0)), bb_eng
                     )
                     gim, rcs, fins = self._attitude_allocate_3d(
                         est,
@@ -1787,22 +2270,25 @@ class RtlsController3D:
                         accel_limit_deg_s2=1.0,
                         high_q_guard=False,
                         use_xy_torque_bias=self.gnc_v2.use_structural_filter,
+                        engine_mask_7=bb_mask_7,
                     )
                     cmd = ActuatorCommand3D(
                         throttle_cmd=throttle,
-                        active_engines=3,
+                        active_engines=bb_eng,
                         gimbal_rad=gim,
                         rcs_torque_nm=rcs,
                         fin_deflection_rad=fins,
                         phase="boostback",
+                        engine_mask_7=bb_mask_7,
+                        mission_mode=m_mode,
+                        fdir_state=f_state,
                     )
-                    self.estimator.record_command(est.time_s, cmd)
                     self.last_diag = GuidanceDiagnostics3D(
                         phase="boostback",
                         tilt_target_deg=degrees(tilt_angle_rad(q_des)),
                         roll_deg=degrees(roll_angle_rad(est.quat_wxyz)),
                     )
-                    return cmd
+                    return _finish(cmd)
 
         # Phase 4: Ballistic Coast & Grid-Fin Deployment
         if self.phase == "coast":
@@ -1854,15 +2340,16 @@ class RtlsController3D:
                     fin_deflection_rad=fins,
                     deploy_fins=deploy_fins,
                     phase="coast",
+                    mission_mode=m_mode,
+                    fdir_state=f_state,
                 )
-                self.estimator.record_command(est.time_s, cmd)
                 self.last_diag = GuidanceDiagnostics3D(
                     phase="coast",
                     tilt_target_deg=degrees(tilt_angle_rad(q_des)),
                     roll_deg=degrees(roll_angle_rad(est.quat_wxyz)),
                     predicted_unpowered_peak_q_pa=self.cached_unpowered_q_pa,
                 )
-                return cmd
+                return _finish(cmd)
 
         # Phase 5: Entry Burn (Restart #2)
         if self.phase == "entry_burn":
@@ -1921,7 +2408,10 @@ class RtlsController3D:
                 eb_ramp = _smoothstep(eb_el / 0.85)
                 eb_lim = 9.0 if q_pa < 14_000.0 else (6.0 if q_pa < 24_000.0 else 3.5)
                 err_xy = np.array([self.cached_iip_xy_m[0] + 150.0, self.cached_iip_xy_m[1]])
-                if self.gnc_v2.use_structural_filter:
+                if m_mode == "DOWNRANGE_SPLASHDOWN_ABORT":
+                    raw_st = np.zeros(2, dtype=np.float64)
+                    tau_eb_st = 0.70
+                elif self.gnc_v2.use_structural_filter:
                     # CSI-certified softer booster loop (kp=0.55, kd=1.65) has ~3 s settling lag;
                     # use causal PD phase-lead on IIP velocity + circular 6 deg cap + earlier cutoff
                     # taper to eliminate entry-burn coning & slosh wall rebound at MECO-2.
@@ -1972,7 +2462,14 @@ class RtlsController3D:
                 raw_thr = min(hi3, max_t / max(full_t, 1.0))
                 if q_pa > 12_000.0 and raw_thr < lo3:
                     self.entry_single_engine = True
-                eb_eng = 1 if self.entry_single_engine else 3
+                eb_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
+                if self.fdir is not None:
+                    if self.entry_single_engine:
+                        eb_mask_7, eb_eng = self.fdir.select_1eng_mask()
+                    else:
+                        eb_mask_7, eb_eng = self.fdir.select_3eng_mask()
+                else:
+                    eb_eng = 1 if self.entry_single_engine else 3
                 lo_eb = self.vehicle.propulsion.throttle_bounds(eb_eng)[0]
                 throttle = self.vehicle.propulsion.quantize_throttle(
                     lo_eb + eb_ramp * max(0.0, raw_thr - lo_eb), eb_eng
@@ -1984,7 +2481,9 @@ class RtlsController3D:
                     rate_limit_deg_s=6.5,
                     accel_limit_deg_s2=1.6,
                     allow_fin=True,
+                    accel_guard_deg_s2=(2.2 if self.gnc_v2.use_structural_filter else 3.5),
                     use_xy_torque_bias=(eb_el > 1.2),
+                    engine_mask_7=eb_mask_7,
                 )
                 cmd = ActuatorCommand3D(
                     throttle_cmd=throttle,
@@ -1994,15 +2493,17 @@ class RtlsController3D:
                     fin_deflection_rad=fins,
                     deploy_fins=True,
                     phase="entry_burn",
+                    engine_mask_7=eb_mask_7,
+                    mission_mode=m_mode,
+                    fdir_state=f_state,
                 )
-                self.estimator.record_command(est.time_s, cmd)
                 self.last_diag = GuidanceDiagnostics3D(
                     phase="entry_burn",
                     tilt_target_deg=degrees(tilt_angle_rad(q_des)),
                     roll_deg=degrees(roll_angle_rad(est.quat_wxyz)),
                     predicted_unpowered_peak_q_pa=pq,
                 )
-                return cmd
+                return _finish(cmd)
 
         # Phase 6: Unpowered 4-Grid-Fin 3D Aerodynamic Glide (0% Main Throttle!)
         if self.phase == "aero_glide":
@@ -2032,10 +2533,23 @@ class RtlsController3D:
                 hi_z_cap = 6.0 + (s.glide_max_alpha_deg - 6.0) * (
                     1.0 - _smoothstep((est.pos_enu_m[2] - 19_000.0) / 8_000.0)
                 )
-                q_cap = min(
-                    hi_z_cap,
-                    s.glide_max_alpha_deg - 7.5 * _smoothstep((q_pa - 3_500.0) / 6_500.0),
-                )
+                if self.gnc_v2.use_structural_filter:
+                    # Two-stage aerodynamic AoA envelope (v2):
+                    # - Subsonic low-q (q <= 9.0 kPa, z ~ 1..7 km): 9.5..10.1 deg authority for
+                    #   post-blackout crossrange closure without high-q slosh-CG roll coupling.
+                    # - Transonic/supersonic high-q (q >= 11.0 kPa, z ~ 8..25 km): 4.5 deg cap
+                    #   suppresses q*alpha^2 roll torque in jet-shear/Dryden & fin-jam glide.
+                    q_cap = min(
+                        hi_z_cap,
+                        s.glide_max_alpha_deg
+                        - 6.5 * _smoothstep((q_pa - 3_500.0) / 5_500.0)
+                        - 5.0 * _smoothstep((q_pa - 9_000.0) / 2_000.0),
+                    )
+                else:
+                    q_cap = min(
+                        hi_z_cap,
+                        s.glide_max_alpha_deg - 7.5 * _smoothstep((q_pa - 3_500.0) / 6_500.0),
+                    )
                 max_a = q_cap * pre_taper
 
                 # Causal 3D upwind drift lead compensating 24 s Hoverslam wind exposure
@@ -2053,14 +2567,44 @@ class RtlsController3D:
 
                 gl_ramp = _smoothstep((est.time_s - (self.glide_started_s or est.time_s)) / 2.5)
                 iip_vec = np.array(self.cached_iip_xy_m, dtype=np.float64) - glide_target_xy
-                raw_a_xy = k_gl * iip_vec * gl_ramp
+                raw_a_xy = (
+                    np.zeros(2, dtype=np.float64)
+                    if m_mode == "DOWNRANGE_SPLASHDOWN_ABORT"
+                    else k_gl * iip_vec * gl_ramp
+                )
                 a_nrm = float(np.linalg.norm(raw_a_xy))
                 if a_nrm > max_a and a_nrm > 1e-9:
                     raw_a_xy *= max_a / a_nrm
+                # M3 Fin-Jam AoA Corridor Shift (CDR §3.4): keep jammed fin well inside
+                # hinge limit while capping high-q body AoA (<= 4.5 deg at q >= 16 kPa -> 9.5 deg
+                # at low q) so the single healthy fin on the jammed axis NEVER hits +/-20 deg stop!
+                has_fj_gl = self.fdir is not None and any(self.fdir.fin_jammed)
+                if has_fj_gl and self.fdir is not None and q_pa >= 400.0:
+                    hi_q_w = _smoothstep((q_pa - 8_000.0) / 8_000.0)
+                    body_lim_deg = 9.5 - 5.0 * hi_q_w
+                    corridor_half_deg = 15.0 - 3.5 * hi_q_w
+                    for j in range(4):
+                        if self.fdir.fin_jammed[j]:
+                            d_jam_deg = degrees(self.fdir.fin_jam_angles_rad[j])
+                            # Fins 0,1 (+X/-X) see ay_ret (1); fins 2,3 (+Y/-Y) see ax_ret (0)
+                            ax_j = 1 if j < 2 else 0
+                            lo_c = max(-body_lim_deg, d_jam_deg - corridor_half_deg)
+                            hi_c = min(body_lim_deg, d_jam_deg + corridor_half_deg)
+                            if lo_c > hi_c:
+                                mid_c = max(-body_lim_deg, min(body_lim_deg, d_jam_deg))
+                                lo_c, hi_c = mid_c, mid_c
+                            raw_a_xy[ax_j] = max(lo_c, min(hi_c, float(raw_a_xy[ax_j])))
+                    fj_cap = 11.0 - 4.5 * hi_q_w
+                    a_fj_nrm = float(np.linalg.norm(raw_a_xy))
+                    if a_fj_nrm > fj_cap and a_fj_nrm > 1e-9:
+                        raw_a_xy *= fj_cap / a_fj_nrm
                 if est.engine_throttle > 0.01:
                     raw_a_xy[:] = 0.0
 
-                self._glide_alpha_xy_deg += (1.0 - exp(-s.control_dt_s / 0.35)) * (
+                tau_gl_a = (
+                    1.10 if has_fj_gl else (0.50 if self.gnc_v2.use_structural_filter else 0.35)
+                )
+                self._glide_alpha_xy_deg += (1.0 - exp(-s.control_dt_s / tau_gl_a)) * (
                     raw_a_xy - self._glide_alpha_xy_deg
                 )
                 # Construct 3D target pointing vector by tilting retrograde axis in ENU X/Y
@@ -2070,17 +2614,21 @@ class RtlsController3D:
                 q_des = pointing_dir_to_quat_wxyz(d_des)
 
                 deploy_fins_gl = h > h_ignite + 240.0
+                gl_acc_lim = 1.45 if self.gnc_v2.use_structural_filter else 2.2
+                gl_acc_guard = 2.0 if self.gnc_v2.use_structural_filter else 2.3
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
                     0.0,
                     rate_limit_deg_s=9.0,
-                    accel_limit_deg_s2=2.2,
+                    accel_limit_deg_s2=gl_acc_lim,
                     allow_fin=True,
-                    rcs_deadband_nm=5_000.0
-                    if (q_pa > 1_000.0 and est.fin_extension >= 0.4)
-                    else 0.0,
-                    accel_guard_deg_s2=2.3,
+                    rcs_deadband_nm=(
+                        3_500.0
+                        if has_fj_gl
+                        else (5_000.0 if (q_pa > 1_000.0 and est.fin_extension >= 0.4) else 0.0)
+                    ),
+                    accel_guard_deg_s2=gl_acc_guard,
                     use_xy_torque_bias=True,
                 )
                 cmd = ActuatorCommand3D(
@@ -2092,8 +2640,9 @@ class RtlsController3D:
                     deploy_fins=deploy_fins_gl,
                     deploy_gear=(h <= s.gear_deploy_height_m),
                     phase="aero_glide",
+                    mission_mode=m_mode,
+                    fdir_state=f_state,
                 )
-                self.estimator.record_command(est.time_s, cmd)
                 self.last_diag = GuidanceDiagnostics3D(
                     phase="aero_glide",
                     tilt_target_deg=degrees(tilt_angle_rad(q_des)),
@@ -2101,12 +2650,11 @@ class RtlsController3D:
                     predicted_iip_xy_m=self.cached_iip_xy_m,
                     hoverslam_ignition_height_m=h_ignite,
                 )
-                return cmd
+                return _finish(cmd)
 
         # Phase 7: 3->1 Center-Engine 3D Hoverslam
         cmd = self._landing_burn_guidance(est, mass, cg, h)
-        self.estimator.record_command(est.time_s, cmd)
-        return cmd
+        return _finish(cmd)
 
     def diagnostics(self) -> GuidanceDiagnostics3D:
         return self.last_diag

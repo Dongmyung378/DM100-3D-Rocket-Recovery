@@ -51,6 +51,8 @@ from dm100_3d.physics import (
     DrydenTurbulenceSettings,
     DualTankSloshSettings,
     DualTankSloshState,
+    EngineClusterFaultModel3D,
+    FaultSettings3D,
     FeedSettings,
     FeedState,
     FlexBodySettings,
@@ -128,6 +130,8 @@ class Scenario3D:
     disturbances: Disturbances3D = field(default_factory=Disturbances3D)
     sensors: SensorConfig3D = field(default_factory=SensorConfig3D)
     seed: int = 378
+    physics_v2: PhysicsV2Config | None = None
+    expected_mission_mode: str | None = None
 
 
 class MuJoCoPlant3D:
@@ -220,6 +224,50 @@ class MuJoCoPlant3D:
             else None
         )
         self.separation_settings = Separation3DSettings()
+        self.fault_model: EngineClusterFaultModel3D | None = (
+            EngineClusterFaultModel3D(
+                seed=self.config.seed,
+                vehicle=self.vehicle,
+                settings=FaultSettings3D(
+                    engine_thrust_bias_7=pv2.engine_thrust_bias_7,
+                    engine_ign_delay_s_7=pv2.engine_ign_delay_s_7,
+                    side_load_peak_n=pv2.side_load_peak_n,
+                    engine_out_index=pv2.engine_out_index,
+                    engine_out_time_s=pv2.engine_out_time_s,
+                    engine_out_phase=pv2.engine_out_phase,
+                    engine_out_phase_elapsed_s=pv2.engine_out_phase_elapsed_s,
+                    engine_out_spindown_tau_s=pv2.engine_out_spindown_tau_s,
+                    fin_jam_index=pv2.fin_jam_index,
+                    fin_jam_time_s=pv2.fin_jam_time_s,
+                    fin_jam_phase=pv2.fin_jam_phase,
+                    fin_jam_phase_elapsed_s=pv2.fin_jam_phase_elapsed_s,
+                    fin_jam_angle_deg=pv2.fin_jam_angle_deg,
+                ),
+            )
+            if pv2.faults_v2
+            else None
+        )
+        self.mission_mode: str = "RTLS"
+        self.fdir_state: str = "NOMINAL"
+        self.fault_transient_peak_accel_deg_s2: float = 0.0
+        self._last_engine_throttles_7: tuple[float, float, float, float, float, float, float] = (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+        self._last_chamber_ratios_7: tuple[float, float, float, float, float, float, float] = (
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
 
         dist = self.scenario.disturbances
         self.airframe_mass_offset_kg = (dist.initial_mass_scale - 1.0) * self.vehicle.launch_mass_kg
@@ -487,20 +535,23 @@ class MuJoCoPlant3D:
         r_wb = quat_to_rotmat(q)
         mp = self.body.current_mass_props
 
-        # Per-engine nominal chamber pressure ratio (uniform per active engine in M2)
-        eng_thr = (
-            min(1.0, self.engine_throttle * (7.0 / max(self.active_engines, 1)))
-            if self.active_engines > 0
-            else 0.0
-        )
-        if self.active_engines == 7:
-            ratios_7 = (eng_thr,) * 7
-        elif self.active_engines == 3:
-            ratios_7 = (eng_thr, eng_thr, 0.0, 0.0, eng_thr, 0.0, 0.0)
-        elif self.active_engines == 1:
-            ratios_7 = (eng_thr, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        # Per-engine chamber pressure ratios (actual 7-engine cluster when faults_v2 active)
+        if self.fault_model is not None:
+            ratios_7 = self._last_chamber_ratios_7
         else:
-            ratios_7 = (0.0,) * 7
+            eng_thr = (
+                min(1.0, self.engine_throttle * (7.0 / max(self.active_engines, 1)))
+                if self.active_engines > 0
+                else 0.0
+            )
+            if self.active_engines == 7:
+                ratios_7 = (eng_thr,) * 7
+            elif self.active_engines == 3:
+                ratios_7 = (eng_thr, eng_thr, 0.0, 0.0, eng_thr, 0.0, 0.0)
+            elif self.active_engines == 1:
+                ratios_7 = (eng_thr, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            else:
+                ratios_7 = (0.0,) * 7
 
         s_out = self.sensors_v2.sample_50hz(
             time_s=self.time_s,
@@ -663,19 +714,28 @@ class MuJoCoPlant3D:
         ag = self.vehicle.ascent_gate
         p_com, v_com, q_wxyz, om_b = self.body.get_com_state()
         spd = float(np.linalg.norm(v_com))
+        eo_active = self.fault_model is not None and any(self.fault_model.engine_failed)
+        if self.mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT":
+            sep_min_prop = 3_500.0
+            sep_alt_tol = 24_000.0
+        elif eo_active:
+            sep_min_prop = 9_500.0
+            sep_alt_tol = 20_000.0
+        else:
+            sep_min_prop = ag.separation_min_main_propellant_kg
+            sep_alt_tol = ag.separation_tolerance_m
         checks = {
-            "altitude": abs(float(p_com[2]) - ag.separation_altitude_m)
-            <= ag.separation_tolerance_m,
+            "altitude": abs(float(p_com[2]) - ag.separation_altitude_m) <= sep_alt_tol,
             "speed": spd >= ag.separation_min_speed_m_s,
             "dynamic_pressure": q_pa <= ag.separation_max_q_pa,
             "angular_rate": degrees(float(np.linalg.norm(om_b))) <= ag.separation_max_rate_deg_s,
             "alpha": abs(alpha_deg) <= ag.separation_max_alpha_deg,
-            "main_reserve": self.main_prop_kg >= ag.separation_min_main_propellant_kg,
+            "main_reserve": self.main_prop_kg >= sep_min_prop,
             "main_engine_off": self.engine_throttle <= 0.01,
             "after_observed_max_q": self.observed_max_q_passed,
         }
         if not all(checks.values()):
-            if float(p_com[2]) > ag.separation_altitude_m + ag.separation_tolerance_m:
+            if float(p_com[2]) > ag.separation_altitude_m + sep_alt_tol:
                 self.outcome = "separation_gate_missed"
             return
 
@@ -813,17 +873,28 @@ class MuJoCoPlant3D:
         tilt_pad_deg = degrees(acos(max(-1.0, min(1.0, float(r_wb[:, 2] @ n_surf)))))
 
         lim = self.vehicle.safety
-        criteria = {
-            "position": pos_err <= lim.max_position_error_m,
-            "vertical_foot_speed": foot_v_vert_max <= lim.max_vertical_foot_speed_m_s,
-            "horizontal_foot_speed": foot_v_horiz_max <= lim.max_horizontal_contact_speed_m_s,
-            "tilt": tilt_deg <= lim.max_contact_tilt_deg,
-            "angular_rate": rate_deg_s <= lim.max_contact_rate_deg_s,
-            "main_propellant": self.main_prop_kg > 0.0,
-            "rcs_propellant": self.rcs_prop_kg >= 0.0,
-            "gear_deployed": self.gear_extension >= 0.99,
-            "feet_on_pad": feet_on_pad,
-        }
+        if self.mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT":
+            criteria = {
+                "vertical_foot_speed": foot_v_vert_max <= lim.max_vertical_foot_speed_m_s,
+                "horizontal_foot_speed": foot_v_horiz_max <= 0.8,
+                "tilt": tilt_deg <= 5.0,
+                "angular_rate": rate_deg_s <= 2.0,
+                "main_propellant": self.main_prop_kg > 0.0,
+                "rcs_propellant": self.rcs_prop_kg >= 0.0,
+                "gear_deployed": self.gear_extension >= 0.99,
+            }
+        else:
+            criteria = {
+                "position": pos_err <= lim.max_position_error_m,
+                "vertical_foot_speed": foot_v_vert_max <= lim.max_vertical_foot_speed_m_s,
+                "horizontal_foot_speed": foot_v_horiz_max <= lim.max_horizontal_contact_speed_m_s,
+                "tilt": tilt_deg <= lim.max_contact_tilt_deg,
+                "angular_rate": rate_deg_s <= lim.max_contact_rate_deg_s,
+                "main_propellant": self.main_prop_kg > 0.0,
+                "rcs_propellant": self.rcs_prop_kg >= 0.0,
+                "gear_deployed": self.gear_extension >= 0.99,
+                "feet_on_pad": feet_on_pad,
+            }
         self.first_contact_record = {
             "time_s": self.time_s,
             "pos_xy_m": (float(p_com[0]), float(p_com[1])),
@@ -845,6 +916,9 @@ class MuJoCoPlant3D:
         self.action_queue.append(command)
         cmd = self.action_queue[0]
         self.phase = cmd.phase
+        if cmd.mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT":
+            self.mission_mode = "DOWNRANGE_SPLASHDOWN_ABORT"
+        self.fdir_state = cmd.fdir_state
 
         # Enforce engine restart readiness, ignition delay (0.2 s), and max 3 restarts
         prop = self.vehicle.propulsion
@@ -938,13 +1012,7 @@ class MuJoCoPlant3D:
 
         last_ft = None
         for _ in range(n_sub):
-            # 1. Update actuator first-order + rate-limited states
-            self.engine_throttle += (req_thr - self.engine_throttle) * (
-                1.0 - exp(-dt / self.engine_tau_s)
-            )
-            if self.main_prop_kg <= 0.0 or self.touchdown_time_s is not None:
-                self.engine_throttle = 0.0
-
+            # 1. Update actuator first-order + rate-limited states (or 7-engine fault cluster)
             for i in range(2):
                 dg = cmd.gimbal_rad[i] - self.gimbal[i]
                 step_g = max(-g_rate * dt, min(g_rate * dt, dg * (1.0 - exp(-dt / g_tau))))
@@ -954,10 +1022,29 @@ class MuJoCoPlant3D:
                 self.gimbal[0] *= g_lim / g_mag
                 self.gimbal[1] *= g_lim / g_mag
 
-            for i in range(4):
-                df = cmd.fin_deflection_rad[i] - self.fin_deflection[i]
-                step_f = max(-f_rate * dt, min(f_rate * dt, df * (1.0 - exp(-dt / f_tau))))
-                self.fin_deflection[i] = max(-f_lim, min(f_lim, self.fin_deflection[i] + step_f))
+            if self.fault_model is not None:
+                self.fin_deflection = self.fault_model.apply_fin_jam_dynamics(
+                    time_s=self.time_s,
+                    dt_s=dt,
+                    phase=self.phase,
+                    fin_deflection=self.fin_deflection,
+                    cmd_fin_deflection_rad=cmd.fin_deflection_rad,
+                    fin_rate_rad_s=f_rate,
+                    fin_tau_s=f_tau,
+                    fin_limit_rad=f_lim,
+                )
+            else:
+                self.engine_throttle += (req_thr - self.engine_throttle) * (
+                    1.0 - exp(-dt / self.engine_tau_s)
+                )
+                if self.main_prop_kg <= 0.0 or self.touchdown_time_s is not None:
+                    self.engine_throttle = 0.0
+                for i in range(4):
+                    df = cmd.fin_deflection_rad[i] - self.fin_deflection[i]
+                    step_f = max(-f_rate * dt, min(f_rate * dt, df * (1.0 - exp(-dt / f_tau))))
+                    self.fin_deflection[i] = max(
+                        -f_lim, min(f_lim, self.fin_deflection[i] + step_f)
+                    )
 
             if cmd.deploy_fins and not self.upper_attached:
                 self.fin_extension = min(
@@ -991,6 +1078,44 @@ class MuJoCoPlant3D:
                     pos_xy_m=(float(p_com[0]), float(p_com[1])),
                 )
             _, p_pa, _ = self.atmo_lut.at(float(p_com[2]))
+            if pv2.dual_tank_slosh:
+                b_off = dual_slosh_body_offset_3d(
+                    tot_m, self.main_prop_kg, self.dual_slosh_state, self.dual_slosh_settings
+                )
+            else:
+                b_off = slosh_body_offset_3d(
+                    tot_m, self.main_prop_kg, self.slosh_state, self.slosh_settings
+                )
+
+            cluster_asym_tau = (0.0, 0.0, 0.0)
+            cluster_side_f_b = (0.0, 0.0, 0.0)
+            cluster_side_tau = (0.0, 0.0, 0.0)
+            if self.fault_model is not None:
+                cl_out = self.fault_model.step_cluster(
+                    time_s=self.time_s,
+                    dt_s=dt,
+                    phase=self.phase,
+                    req_total_throttle=req_thr,
+                    active_engines=self.active_engines,
+                    engine_mask_7=cmd.engine_mask_7,
+                    engine_throttles_cmd_7=cmd.engine_throttles_7,
+                    engine_tau_s=self.engine_tau_s,
+                    ambient_pressure_pa=p_pa,
+                    cg_station_m=mp.cg_station_m,
+                    gimbal_rad=(self.gimbal[0], self.gimbal[1]),
+                    thrust_scale=dist.thrust_scale,
+                    delivered_ratio=1.0,
+                    main_prop_kg=self.main_prop_kg,
+                    touchdown_detected=self.touchdown_time_s is not None,
+                    body_offset_body_m=b_off,
+                )
+                self.engine_throttle = cl_out.total_throttle_equiv
+                self._last_engine_throttles_7 = cl_out.engine_throttles_7
+                self._last_chamber_ratios_7 = cl_out.chamber_pressure_ratios_7
+                cluster_asym_tau = cl_out.asymmetric_torque_body_nm
+                cluster_side_f_b = cl_out.side_load_force_body_n
+                cluster_side_tau = cl_out.side_load_torque_body_nm
+
             _, dem_flow = compute_engine_thrust_3d(
                 self.engine_throttle, p_pa, self.vehicle, thrust_scale=dist.thrust_scale
             )
@@ -1001,20 +1126,22 @@ class MuJoCoPlant3D:
             if not fr.inventory_valid:
                 self.feed_inventory_ok = False
             delivered_ratio = fr.delivered_flow_kg_s / dem_flow if dem_flow > 1e-6 else 1.0
+            if self.fault_model is not None and delivered_ratio < 1.0:
+                cluster_asym_tau = tuple(v * delivered_ratio for v in cluster_asym_tau)  # type: ignore[assignment]
+                self._last_chamber_ratios_7 = tuple(
+                    v * delivered_ratio for v in self._last_chamber_ratios_7
+                )  # type: ignore[assignment]
 
+            td_rcs_ok = (
+                pv2.any_enabled()
+                and self.touchdown_time_s is not None
+                and (self.time_s - self.touchdown_time_s) <= 3.5
+            )
             rcs_cmd = (
                 cmd.rcs_torque_nm
-                if (self.rcs_prop_kg > 0.0 and self.touchdown_time_s is None)
+                if (self.rcs_prop_kg > 0.0 and (self.touchdown_time_s is None or td_rcs_ok))
                 else (0.0, 0.0, 0.0)
             )
-            if pv2.dual_tank_slosh:
-                b_off = dual_slosh_body_offset_3d(
-                    tot_m, self.main_prop_kg, self.dual_slosh_state, self.dual_slosh_settings
-                )
-            else:
-                b_off = slosh_body_offset_3d(
-                    tot_m, self.main_prop_kg, self.slosh_state, self.slosh_settings
-                )
 
             extra_wind = (0.0, 0.0, 0.0)
             if self.dryden_turbulence is not None:
@@ -1101,8 +1228,12 @@ class MuJoCoPlant3D:
             self._last_ft_heat_w_m2 = ft.heat_flux_w_m2
             self._last_ft_thrust_n = ft.thrust_n
 
-            # Optional external 3D roll disturbance pulse + SRP buffeting + ground effect
+            # Optional external 3D roll disturbance pulse + SRP buffeting + 7-eng asym/side-load
             tau_b = np.asarray(ft.torque_body_nm, dtype=np.float64)
+            if cluster_asym_tau != (0.0, 0.0, 0.0):
+                tau_b = tau_b + np.asarray(cluster_asym_tau, dtype=np.float64)
+            if cluster_side_tau != (0.0, 0.0, 0.0):
+                tau_b = tau_b + np.asarray(cluster_side_tau, dtype=np.float64)
             if srp_buffet_tau != (0.0, 0.0, 0.0):
                 tau_b = tau_b + np.asarray(srp_buffet_tau, dtype=np.float64)
             if (
@@ -1118,6 +1249,8 @@ class MuJoCoPlant3D:
                 tau_b[2] += dist.roll_disturbance_torque_nm * env
 
             f_w_ext = np.asarray(ft.force_world_n, dtype=np.float64)
+            if cluster_side_f_b != (0.0, 0.0, 0.0):
+                f_w_ext = f_w_ext + r_wb @ np.asarray(cluster_side_f_b, dtype=np.float64)
             if (
                 pv2.ground_effect
                 and (not self.upper_attached)
@@ -1385,14 +1518,53 @@ class MuJoCoPlant3D:
                 if pv2.sloped_pad
                 else 0.0
             )
-            in_ground_contact = self.touchdown_time_s is not None or (
-                in_contact_zone
-                and (
-                    self.body.sample_contact().any_contact
-                    or float(p_after[2]) - mp.cg_station_m - z_surf_after
-                    <= -self.vehicle.landing_gear.foot_station_m + 0.05
+            if pv2.any_enabled() and in_contact_zone:
+                cs_pre = self.body.sample_contact()
+                r_wb_after = quat_to_rotmat(q_after)
+                gear = self.vehicle.landing_gear
+                min_foot_clear = min(
+                    float(
+                        (
+                            p_after
+                            + r_wb_after
+                            @ np.array(
+                                [
+                                    ux * gear.half_span_m,
+                                    uy * gear.half_span_m,
+                                    gear.foot_station_m - mp.cg_station_m,
+                                ],
+                                dtype=np.float64,
+                            )
+                        )[2]
+                    )
+                    - self.body.surface_height_and_normal(
+                        float(
+                            p_after[0]
+                            + (r_wb_after[0, 0] * ux + r_wb_after[0, 1] * uy) * gear.half_span_m
+                        ),
+                        float(
+                            p_after[1]
+                            + (r_wb_after[1, 0] * ux + r_wb_after[1, 1] * uy) * gear.half_span_m
+                        ),
+                        upper_attached=self.upper_attached,
+                    )[0]
+                    for ux, uy in LEG_UNIT_DIRS
                 )
-            )
+                in_ground_contact = (
+                    self.touchdown_time_s is not None
+                    or cs_pre.any_contact
+                    or any(st > 1e-6 for st in cs_pre.leg_stroke_m)
+                    or min_foot_clear <= 0.05
+                )
+            else:
+                in_ground_contact = self.touchdown_time_s is not None or (
+                    in_contact_zone
+                    and (
+                        self.body.sample_contact().any_contact
+                        or float(p_after[2]) - mp.cg_station_m - z_surf_after
+                        <= -self.vehicle.landing_gear.foot_station_m + 0.05
+                    )
+                )
             self.max_q_pa = max(self.max_q_pa, ft.dynamic_pressure_pa)
             self.max_heat_flux_w_m2 = max(self.max_heat_flux_w_m2, ft.heat_flux_w_m2)
             if self.upper_attached:
@@ -1421,7 +1593,18 @@ class MuJoCoPlant3D:
                 self.max_rate_deg_s = max(
                     self.max_rate_deg_s, degrees(float(np.linalg.norm(om_after)))
                 )
-                if self.separation_time_s is None or self.time_s > self.separation_time_s + 0.20:
+                in_fault_window = (
+                    self.fault_model is not None
+                    and self.fault_model.first_fault_time_s is not None
+                    and self.fault_model.first_fault_time_s
+                    <= self.time_s
+                    <= self.fault_model.first_fault_time_s + 0.35
+                )
+                if in_fault_window:
+                    self.fault_transient_peak_accel_deg_s2 = max(
+                        self.fault_transient_peak_accel_deg_s2, ang_acc
+                    )
+                elif self.separation_time_s is None or self.time_s > self.separation_time_s + 0.20:
                     self.max_accel_deg_s2 = max(self.max_accel_deg_s2, ang_acc)
             self._prev_omega_b = om_after.copy()
             self.max_gimbal_deg = max(
@@ -1448,6 +1631,16 @@ class MuJoCoPlant3D:
                     self.max_leg_stroke_m = max(self.max_leg_stroke_m, max(cs.leg_stroke_m))
                     self.max_leg_force_n = max(self.max_leg_force_n, max(cs.leg_normal_n))
                     self.max_contact_load_g = max(self.max_contact_load_g, cs.contact_load_g)
+                    if self.mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT":
+                        # Ocean soft splashdown terminates immediately upon z=0 contact (CDR §4.3)
+                        splash_ok = (
+                            self.first_contact_record is not None
+                            and all(self.first_contact_record["criteria"].values())
+                            and not self.body_ground_collision
+                        )
+                        self.standing_stable = splash_ok
+                        self.outcome = "splashdown_abort" if splash_ok else "hard_splashdown"
+                        return
 
                 if self.touchdown_time_s is not None:
                     tilt_now = degrees(tilt_angle_rad(q_after))
@@ -1475,7 +1668,12 @@ class MuJoCoPlant3D:
                         self.outcome = "landed" if self.standing_stable else "standing_unstable"
                         return
 
-            if self.time_s >= self.config.deadline_s:
+            eff_deadline = (
+                max(self.config.deadline_s, 800.0)
+                if self.mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT"
+                else self.config.deadline_s
+            )
+            if self.time_s >= eff_deadline:
                 self.outcome = "timeout"
                 return
 
@@ -1587,14 +1785,39 @@ class MuJoCoPlant3D:
         if self.physics_v2.any_enabled():
             # Criterion #21 (CDR §2.1): All-flight roll stability <= 5.0 deg
             criteria["roll_stability"] = self.max_roll_deg <= 5.0 + eps
+        if self.fault_model is not None and self.fault_model.first_fault_time_s is not None:
+            criteria["fault_transient_accel"] = self.fault_transient_peak_accel_deg_s2 <= 25.0 + eps
         failed = [k for k, v in criteria.items() if not v]
-        passed = (self.outcome == "landed") and (len(failed) == 0)
+        is_abort = self.mission_mode == "DOWNRANGE_SPLASHDOWN_ABORT"
+        expected_ok_outcome = "splashdown_abort" if is_abort else "landed"
+        passed = (self.outcome == expected_ok_outcome) and (len(failed) == 0)
         fc = self.first_contact_record or {}
         _, v_end, q_end, _ = self.body.get_com_state()
+        catastrophic = (
+            self.outcome
+            in {
+                "body_ground_collision",
+                "tip_over",
+                "numerical_divergence",
+                "timeout",
+                "separation_gate_missed",
+                "hard_splashdown",
+            }
+            or (not criteria["upper_stage_orbit"])
+            or (not criteria.get("structural_integrity", True))
+            or (float(fc.get("vertical_foot_speed_m_s") or 0.0) > 3.5)
+        )
+        outcome_tier = (
+            "NOMINAL_PASS" if passed else ("DESTROYED" if catastrophic else "SURVIVED_OUT_OF_SPEC")
+        )
         return {
             "version": "dm100_3d_mujoco",
             "scenario": self.scenario.name,
             "outcome": self.outcome,
+            "mission_mode": self.mission_mode,
+            "fdir_state": self.fdir_state,
+            "catastrophic_failure": catastrophic,
+            "outcome_tier": outcome_tier,
             "requirements_passed": passed,
             "criteria": criteria,
             "failed_criteria": failed,
@@ -1650,6 +1873,17 @@ class MuJoCoPlant3D:
                     "min_bending_safety_factor": (min_bend_sf if isfinite(min_bend_sf) else None),
                     "pad_slope_deg": self.body.pad_slope_deg,
                     "gps_blackout_total_s": self.gps_blackout_total_s,
+                    "fault_transient_peak_accel_deg_s2": self.fault_transient_peak_accel_deg_s2,
+                    "engine_out_triggered_time_s": (
+                        self.fault_model.engine_out_triggered_time_s
+                        if self.fault_model is not None
+                        else None
+                    ),
+                    "fin_jam_triggered_time_s": (
+                        self.fault_model.fin_jam_triggered_time_s
+                        if self.fault_model is not None
+                        else None
+                    ),
                 }
                 if self.physics_v2.any_enabled()
                 else None
@@ -1692,4 +1926,21 @@ def run_flight_3d(
     summary["socp_solver_used"] = diag.socp_solver_used
     summary["socp_solver_status"] = diag.socp_solver_status
     summary["socp_solve_ms"] = diag.socp_solve_ms
+    if scfg.gnc_v2.any_enabled() and isinstance(ctrl, RtlsController3D):
+        summary["expected_mission_mode"] = scen.expected_mission_mode
+        if ctrl.online_mpc is not None:
+            summary["mpc_metrics"] = {
+                "total_solves": ctrl.online_mpc.total_solves,
+                "valid_solves": ctrl.online_mpc.total_valid_solves,
+                "max_solve_ms": ctrl.online_mpc.max_solve_ms,
+                "max_iterations": ctrl.online_mpc.max_iterations,
+            }
+        if ctrl.fdir is not None:
+            summary["fdir_metrics"] = {
+                "engine_out_detected_time_s": ctrl.fdir.engine_out_detected_time_s,
+                "fin_jam_detected_time_s": ctrl.fdir.fin_jam_detected_time_s,
+                "abort_triggered_time_s": ctrl.fdir.abort_triggered_time_s,
+                "engine_failed_7": tuple(ctrl.fdir.engine_failed),
+                "fin_jammed_4": tuple(ctrl.fdir.fin_jammed),
+            }
     return summary, plant.replay_frames

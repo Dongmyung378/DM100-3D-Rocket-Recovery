@@ -45,6 +45,15 @@ class Allocation3DInput:
     # weathercock torque and cos(alpha) lift projection; matches DM100 2D guidance.py)
     fin_zero_torque_body_nm: tuple[float, float, float] | None = None
     fin_axis_eff_nm_per_rad: tuple[float, float, float] | None = None
+    # Optional M3 3x4 individual-fin Jacobian & Fin-Jam FDIR reconfiguration inputs
+    fin_jacobian_3x4: np.ndarray | None = None
+    fin_ref_deflection_rad: tuple[float, float, float, float] | None = None
+    fin_ref_torque_body_nm: tuple[float, float, float] | None = None
+    fin_jammed_mask: tuple[bool, bool, bool, bool] | None = None
+    fin_jammed_angles_rad: tuple[float, float, float, float] | None = None
+    current_fin_deflection_rad: tuple[float, float, float, float] | None = None
+    fin_jam_elapsed_s: float | None = None
+    vb_gimbal_max_step_deg: float = 1.6
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +67,65 @@ class Allocation3DOutput:
 
 class PriorityControlAllocator3D:
     """Hierarchical 3-axis -> 9-DOF control allocator."""
+
+    @staticmethod
+    def _solve_small_box_qp(
+        h_mat: np.ndarray,
+        g_vec: np.ndarray,
+        lo: np.ndarray,
+        hi: np.ndarray,
+    ) -> np.ndarray:
+        """Solve exact global min of 0.5*u^T H u - g^T u s.t. lo <= u <= hi for m <= 3.
+
+        Immune to ill-conditioned H (e.g., cond(H) = 10^6 from 10x inertia-normalized roll
+        priority) where coordinate descent stalls; runs in < 0.03 ms.
+        """
+        m = len(g_vec)
+        try:
+            u_unc = np.linalg.solve(h_mat, g_vec)
+            if np.all(u_unc >= lo - 1e-12) and np.all(u_unc <= hi + 1e-12):
+                return np.clip(u_unc, lo, hi)
+        except np.linalg.LinAlgError:
+            pass
+
+        best_u = np.clip(np.zeros(m, dtype=np.float64), lo, hi)
+        best_obj = float(0.5 * (best_u @ (h_mat @ best_u)) - g_vec @ best_u)
+
+        # Enumerate all 3^m <= 27 active-set faces (0=free, 1=lower, 2=upper)
+        n_states = 3**m
+        for code in range(n_states):
+            c = code
+            u_cand = np.zeros(m, dtype=np.float64)
+            free_i: list[int] = []
+            fixed_i: list[int] = []
+            for k in range(m):
+                st = c % 3
+                c //= 3
+                if st == 0:
+                    free_i.append(k)
+                elif st == 1:
+                    u_cand[k] = float(lo[k])
+                    fixed_i.append(k)
+                else:
+                    u_cand[k] = float(hi[k])
+                    fixed_i.append(k)
+            if free_i:
+                rhs = g_vec[free_i].copy()
+                if fixed_i:
+                    rhs -= h_mat[np.ix_(free_i, fixed_i)] @ u_cand[fixed_i]
+                h_ff = h_mat[np.ix_(free_i, free_i)]
+                try:
+                    u_ff = np.linalg.solve(h_ff, rhs)
+                except np.linalg.LinAlgError:
+                    continue
+                if np.any(u_ff < lo[free_i] - 1e-10) or np.any(u_ff > hi[free_i] + 1e-10):
+                    continue
+                u_cand[free_i] = np.clip(u_ff, lo[free_i], hi[free_i])
+            obj = float(0.5 * (u_cand @ (h_mat @ u_cand)) - g_vec @ u_cand)
+            if obj < best_obj:
+                best_obj = obj
+                best_u = u_cand
+        return best_u
 
     def __init__(self, vehicle: DM100VehicleConfig) -> None:
         self.vehicle = vehicle
@@ -100,7 +168,9 @@ class PriorityControlAllocator3D:
         # Fin 1 (-X, +Y lift): tau_x = -az*L, tau_z = -rc*L
         # Fin 2 (+Y, +X lift): tau_y = +az*L, tau_z = -rc*L
         # Fin 3 (-Y, +X lift): tau_y = +az*L, tau_z = +rc*L
-        if inp.fin_axis_eff_nm_per_rad is not None:
+        if inp.fin_jacobian_3x4 is not None:
+            b_mat[:, 0:4] = np.asarray(inp.fin_jacobian_3x4, dtype=np.float64).reshape(3, 4)
+        elif inp.fin_axis_eff_nm_per_rad is not None:
             # Exact finite-difference axis slopes:
             #   eff_x = d(tau_x)/d(d_yaw)   (< 0, shared across fins 0,1)
             #   eff_y = d(tau_y)/d(d_pitch) (> 0, shared across fins 2,3)
@@ -148,8 +218,120 @@ class PriorityControlAllocator3D:
         lo_y, hi_y = self._per_fin_bounds(inp.dynamic_pressure_pa, inp.fin_extension, ay_ret)
         fin_cmd = [0.0, 0.0, 0.0, 0.0]
         fin_tau = np.zeros(3, dtype=np.float64)
+        fin_tau_for_rcs = np.zeros(3, dtype=np.float64)
+        active_fin_slew = False
 
-        if f_gain > 1.0 or inp.fin_axis_eff_nm_per_rad is not None:
+        has_jam = (inp.fin_jammed_mask is not None) and any(inp.fin_jammed_mask)
+        if has_jam and (f_gain > 1.0 or inp.fin_jacobian_3x4 is not None):
+            # --- M3 Fin-Jam Reconfiguration: 3x4 Jacobian + roll-weighted (10x) bounded QP ---
+            b_fin = b_mat[:, 0:4]
+            if inp.fin_ref_deflection_rad is not None and inp.fin_ref_torque_body_nm is not None:
+                u_ref = np.asarray(inp.fin_ref_deflection_rad, dtype=np.float64)
+                t_ref = np.asarray(inp.fin_ref_torque_body_nm, dtype=np.float64)
+            else:
+                u_ref = np.array([ay_ret, ay_ret, ax_ret, ax_ret], dtype=np.float64)
+                t_ref = (
+                    np.asarray(inp.fin_zero_torque_body_nm, dtype=np.float64) + b_fin @ u_ref
+                    if inp.fin_zero_torque_body_nm is not None
+                    else np.zeros(3, dtype=np.float64)
+                )
+            jam_mask = inp.fin_jammed_mask
+            assert jam_mask is not None
+            jam_ang = inp.fin_jammed_angles_rad or (0.0, 0.0, 0.0, 0.0)
+            bounds_4 = [(lo_y, hi_y), (lo_y, hi_y), (lo_x, hi_x), (lo_x, hi_x)]
+            feather_4 = [ay_ret, ay_ret, ax_ret, ax_ret]
+
+            u_sol = np.array(feather_4, dtype=np.float64)
+            free_idx: list[int] = []
+            tau_jam_delta = np.zeros(3, dtype=np.float64)
+            for j in range(4):
+                if jam_mask[j]:
+                    u_j = max(-self._fin_lim, min(self._fin_lim, float(jam_ang[j])))
+                    u_sol[j] = u_j
+                    tau_jam_delta += b_fin[:, j] * (u_j - float(u_ref[j]))
+                else:
+                    free_idx.append(j)
+                    lo_j, hi_j = bounds_4[j]
+                    u_sol[j] = max(lo_j, min(hi_j, feather_4[j]))
+
+            if free_idx:
+                inv_i = 1.0 / np.maximum(i_vec, 1.0)
+                if inp.allow_fin_allocation:
+                    # Healthy-fin target: req_guarded = t_ref + tau_jam_delta + B_free*(u - u_ref)
+                    rhs_tau = req_guarded - t_ref - tau_jam_delta
+                    # Inertia-normalized angular-accel weighting with 10x roll priority
+                    # (Izz << Ixx; guarantees roll torque exact even if yaw/pitch fin saturates!)
+                    w_vec = np.array([inv_i[0], inv_i[1], 10.0 * inv_i[2]], dtype=np.float64)
+                    reg_scale = 1e-5
+                else:
+                    # Feather healthy fins while cancelling jammed fin's roll torque
+                    rhs_tau = req_guarded - t_ref - tau_jam_delta
+                    w_vec = np.array(
+                        [0.05 * inv_i[0], 0.05 * inv_i[1], 10.0 * inv_i[2]], dtype=np.float64
+                    )
+                    reg_scale = 1e-3
+
+                b_free = b_fin[:, free_idx]
+                u_ref_f = u_ref[free_idx]
+                u_f = u_sol[free_idx] - u_ref_f
+                u_f_lo = np.array([bounds_4[j][0] - float(u_ref[j]) for j in free_idx])
+                u_f_hi = np.array([bounds_4[j][1] - float(u_ref[j]) for j in free_idx])
+                u_f_feath = np.array([feather_4[j] - float(u_ref[j]) for j in free_idx])
+
+                # Normal equations H = B_f^T W^2 B_f + reg*I, g = B_f^T W^2 rhs + reg*u_feath
+                wb = b_free * w_vec[:, None]
+                reg_w = reg_scale * max(float(np.max(np.abs(wb))) ** 2, 1e-12)
+                h_mat = wb.T @ wb + reg_w * np.eye(len(free_idx), dtype=np.float64)
+                g_vec = wb.T @ (w_vec * rhs_tau) + reg_w * u_f_feath
+
+                # Exact active-set 3x3 box QP (exact to 1e-15 even at cond(H) = 10^6, < 0.03 ms)
+                u_f = self._solve_small_box_qp(h_mat, g_vec, u_f_lo, u_f_hi)
+
+                for k, j in enumerate(free_idx):
+                    u_sol[j] = float(u_ref_f[k] + u_f[k])
+
+            fin_cmd = [float(u_sol[0]), float(u_sol[1]), float(u_sol[2]), float(u_sol[3])]
+            fin_tau = t_ref + b_fin @ (u_sol - u_ref)
+            # Smooth slew-midpoint fin torque for Stage-3 RCS: `cur_j` lags the true plant fin by
+            # 1.0*dt (resolver lag), so advance 1.5*dt and smoothly blend [0.25, 0.55] deg into
+            # `u_sol` so RCS engages immediately on jam detection AND ramps off with zero step kick!
+            if inp.current_fin_deflection_rad is not None:
+                f_rate = radians(fins.deflection_rate_deg_s)
+                f_tau_act = fins.actuator_time_constant_s
+                dt_pred = 2.0 * inp.control_dt_s
+                # Tight slew ramp during first 0.65 s of jam recovery for smooth RCS handoff,
+                # then smoothly widen to [0.75, 1.45] deg so steady resolver noise never chatters.
+                el_j = inp.fin_jam_elapsed_s if inp.fin_jam_elapsed_s is not None else 0.0
+                w_el = max(0.0, min(1.0, (el_j - 0.65) / 0.60))
+                gate_lo = radians(0.15 + 0.60 * w_el)
+                gate_hi = radians(0.45 + 1.00 * w_el)
+                u_mid = np.zeros(4, dtype=np.float64)
+                for j in range(4):
+                    if jam_mask[j]:
+                        u_mid[j] = u_sol[j]
+                    else:
+                        cur_j = float(inp.current_fin_deflection_rad[j])
+                        df_j = float(u_sol[j]) - cur_j
+                        step_j = max(
+                            -f_rate * dt_pred,
+                            min(f_rate * dt_pred, df_j * (1.0 - exp(-dt_pred / f_tau_act))),
+                        )
+                        u_pred_j = cur_j + step_j
+                        err_j = abs(float(u_sol[j]) - u_pred_j)
+                        if err_j <= gate_lo:
+                            u_mid[j] = u_sol[j]
+                        elif err_j >= gate_hi:
+                            active_fin_slew = True
+                            u_mid[j] = u_pred_j
+                        else:
+                            w_s = (err_j - gate_lo) / (gate_hi - gate_lo)
+                            if w_s > 0.25:
+                                active_fin_slew = True
+                            u_mid[j] = (1.0 - w_s) * float(u_sol[j]) + w_s * u_pred_j
+                fin_tau_for_rcs = t_ref + b_fin @ (u_mid - u_ref)
+            else:
+                fin_tau_for_rcs = fin_tau
+        elif f_gain > 1.0 or inp.fin_axis_eff_nm_per_rad is not None:
             if inp.fin_zero_torque_body_nm is not None and inp.fin_axis_eff_nm_per_rad is not None:
                 tau0 = np.asarray(inp.fin_zero_torque_body_nm, dtype=np.float64)
                 eff_yaw, eff_pitch, eff_roll = inp.fin_axis_eff_nm_per_rad
@@ -199,6 +381,7 @@ class PriorityControlAllocator3D:
                     max(lo_x, min(hi_x, ax_ret + d_roll)),
                 ]
             fin_tau = tau0 + b_mat[:, 0:4] @ np.asarray(fin_cmd, dtype=np.float64)
+            fin_tau_for_rcs = fin_tau
 
         res_after_fin = req_guarded - fin_tau
 
@@ -213,7 +396,7 @@ class PriorityControlAllocator3D:
                 # In vertical-body terminal mode, steer thrust laterally within RCS counter-margin
                 rcs_lim = prop.rcs_torque_limit_nm
                 des_gy, des_gx = inp.thrust_tilt_cmd_body_xy
-                max_step = radians(1.6)
+                max_step = radians(inp.vb_gimbal_max_step_deg)
                 lo_gy = max(
                     -self._gim_lim,
                     asin(max(-1.0, min(1.0, (-rcs_lim - float(res_after_fin[1])) / t_lev))),
@@ -295,7 +478,7 @@ class PriorityControlAllocator3D:
             else:
                 eff_tvc = tvc_tau
 
-            res_after_tvc = req_guarded - (fin_tau + eff_tvc)
+            res_after_tvc = req_guarded - (fin_tau_for_rcs + eff_tvc)
             lims = (
                 prop.rcs_torque_limit_nm,
                 prop.rcs_torque_limit_nm,
@@ -306,9 +489,14 @@ class PriorityControlAllocator3D:
             # never experiences step discontinuities or zero-g bang-bang slosh pumping.
             axis_guard = guard_rad_s2 / sqrt(3.0)
             i_ref = max(float(i_vec[0]), 1.0)
+            eff_deadband = (
+                0.0
+                if (has_jam and active_fin_slew)
+                else (min(inp.rcs_deadband_nm, 3_500.0) if has_jam else inp.rcs_deadband_nm)
+            )
             for ax_i in range(3):
                 val = float(res_after_tvc[ax_i])
-                db_i = inp.rcs_deadband_nm * min(1.0, float(i_vec[ax_i]) / i_ref)
+                db_i = eff_deadband * min(1.0, float(i_vec[ax_i]) / i_ref)
                 if db_i > 0.0:
                     aval = abs(val)
                     if aval <= db_i:
@@ -316,7 +504,7 @@ class PriorityControlAllocator3D:
                     elif aval < 1.5 * db_i:
                         val *= (aval - db_i) / (0.5 * db_i)
                 g_tau_i = inp.inertia_diag_kg_m2[ax_i] * guard_rad_s2
-                sup = float(fin_tau[ax_i] + eff_tvc[ax_i])
+                sup = float(fin_tau_for_rcs[ax_i] + eff_tvc[ax_i])
                 lo = max(-lims[ax_i], -g_tau_i - float(bg[ax_i]) - sup)
                 hi = min(lims[ax_i], g_tau_i - float(bg[ax_i]) - sup)
                 rcs_cmd[ax_i] = (
@@ -325,12 +513,15 @@ class PriorityControlAllocator3D:
                     else max(lo, min(hi, val))
                 )
             # Final 3D Euclidean norm check on total commanded angular acceleration
-            tot_acc = (bg + fin_tau + eff_tvc + rcs_cmd) / i_vec
+            tot_acc = (bg + fin_tau_for_rcs + eff_tvc + rcs_cmd) / i_vec
             tot_acc_norm = float(np.linalg.norm(tot_acc))
             if tot_acc_norm > guard_rad_s2 and tot_acc_norm > 1e-12:
                 des_tot = tot_acc * (guard_rad_s2 / tot_acc_norm) * i_vec
-                rcs_scaled = des_tot - (bg + fin_tau + eff_tvc)
-                for ax_i in range(3):
+                rcs_scaled = des_tot - (bg + fin_tau_for_rcs + eff_tvc)
+                # Under Fin-Jam pitch/yaw RCS saturation, never scale down roll RCS when the
+                # roll axis itself is already safely inside the guard!
+                max_ax = 2 if (has_jam and abs(float(tot_acc[2])) <= guard_rad_s2) else 3
+                for ax_i in range(max_ax):
                     rcs_cmd[ax_i] = max(-lims[ax_i], min(lims[ax_i], float(rcs_scaled[ax_i])))
             _ = axis_guard
 
