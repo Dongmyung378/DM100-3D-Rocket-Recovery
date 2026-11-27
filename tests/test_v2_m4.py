@@ -447,7 +447,7 @@ def test_fin_jam_aero_hinge_load_derating() -> None:
         fin_rate_rad_s=f_rate,
         fin_tau_s=0.08,
         fin_limit_rad=f_lim,
-        dynamic_pressure_pa=12_500.0,
+        dynamic_pressure_pa=11_000.0,
     )
     assert np.isclose(d_vac[0], -radians(1.2), atol=1e-9)
     assert np.isclose(d_hiq[0], -radians(0.6), atol=1e-9)

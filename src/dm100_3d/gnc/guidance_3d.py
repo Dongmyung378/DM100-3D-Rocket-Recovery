@@ -1994,7 +1994,9 @@ class RtlsController3D:
         land_rate_lim = 9.0
         if vertical_body and degrees(tilt_angle_rad(est.quat_wxyz)) < 2.9:
             if self.gnc_v2.use_structural_filter:
-                land_rate_lim = 0.22 + 5.78 * _smoothstep((h_vref - 0.65) / 3.1)
+                # Clamp body rate down to 0.10 deg/s by h=1.2 m so uphill-leg touchdown on
+                # sloped pads (0-2.5 deg) under surface Dryden gusts stays well below 0.50 deg/s.
+                land_rate_lim = 0.10 + 5.90 * _smoothstep((h_vref - 1.20) / 3.30)
             else:
                 land_rate_lim = 0.25 + 5.75 * _smoothstep((h_vref - 0.65) / 3.1)
         vb_blend = (
@@ -2590,15 +2592,17 @@ class RtlsController3D:
                 )
                 if self.gnc_v2.use_structural_filter:
                     # Two-stage aerodynamic AoA envelope (v2):
-                    # - Subsonic low-q (q <= 9.0 kPa, z ~ 1..7 km): 9.5..10.1 deg authority for
+                    # - Subsonic low-q (z <= 10 km, q <= 9 kPa): 9.5..10.1 deg authority for
                     #   post-blackout crossrange closure without high-q slosh-CG roll coupling.
-                    # - Transonic/supersonic high-q (q >= 11.0 kPa, z ~ 8..25 km): 4.5 deg cap
-                    #   suppresses q*alpha^2 roll torque in jet-shear/Dryden & fin-jam glide.
+                    # - High-altitude supersonic entry into peak-q (z > 10 km): begin tapering at
+                    #   q=6.5 kPa so slow CSI attitude loop unwinds before transonic/high-q Dryden.
+                    q2_start = 6_500.0 if est.pos_enu_m[2] > 10_000.0 else 9_000.0
+                    q2_span = 3_500.0 if est.pos_enu_m[2] > 10_000.0 else 2_000.0
                     q_cap = min(
                         hi_z_cap,
                         s.glide_max_alpha_deg
                         - 6.5 * _smoothstep((q_pa - 3_500.0) / 5_500.0)
-                        - 5.0 * _smoothstep((q_pa - 9_000.0) / 2_000.0),
+                        - 5.0 * _smoothstep((q_pa - q2_start) / q2_span),
                     )
                 else:
                     q_cap = min(
