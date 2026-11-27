@@ -300,17 +300,22 @@ class CausalFdir3D:
                             else 0.0
                         )
                         sustained_runaway = (
-                            el_fj <= 0.60 and abs(dm_j) > radians(0.32) and (dm_j * prev_dm_j) > 0.0
+                            el_fj <= 0.65 and abs(dm_j) > radians(0.28) and (dm_j * prev_dm_j) > 0.0
                         )
                         if sustained_runaway:
-                            lead_k = min(1.05, 0.55 + 0.50 * self.total_delay_steps)
+                            # Match true resolver(1) + obs/act delay ticks during active runaway
+                            # so healthy fins cancel jammed-fin torque with near-zero phase lag!
+                            lead_k = min(2.20, 1.15 + 0.95 * self.total_delay_steps)
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + lead_k * dm_j)
                             )
                         else:
+                            # Fast settle right after hitting jam stop (el_fj <= 0.75 s) so lead
+                            # overshoot clears in 2 ticks, then smooth alpha=0.18 noise filter.
+                            alpha_settle = 0.50 if el_fj <= 0.75 else 0.18
                             cur_est = self.fin_jam_angles_rad[j]
                             self.fin_jam_angles_rad[j] = max(
-                                -f_lim, min(f_lim, cur_est + 0.20 * (meas_j - cur_est))
+                                -f_lim, min(f_lim, cur_est + alpha_settle * (meas_j - cur_est))
                             )
                         continue
                     slew_step_j = max(
@@ -333,8 +338,8 @@ class CausalFdir3D:
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
                             lead_init = (
-                                min(1.10, 0.65 + 0.45 * self.total_delay_steps) * dm_j
-                                if abs(dm_j) > radians(0.32)
+                                min(2.20, 1.15 + 0.95 * self.total_delay_steps) * dm_j
+                                if abs(dm_j) > radians(0.28)
                                 else 0.0
                             )
                             self.fin_jam_angles_rad[j] = max(-f_lim, min(f_lim, meas_j + lead_init))

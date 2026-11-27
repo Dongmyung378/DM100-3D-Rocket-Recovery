@@ -1516,15 +1516,20 @@ class RtlsController3D:
                 and (not is_abort)
                 and h_vref > 12.0
             ):
-                tau_lead_mpc = (0.95 if self.gnc_v2.use_structural_filter else 0.55) * min(
+                tau_lead_mpc = (1.65 if self.gnc_v2.use_structural_filter else 0.55) * min(
                     1.0, max(0.35, (h_vref - 25.0) / 80.0)
                 )
+                # Include mid-horizon angular-rate projection (capped +/-20 deg) so CSI attitude
+                # inertia during large landing-burn EO / blackout diverts unwinds without overshoot.
+                dt_mid = min(0.55, 0.40 * tau_lead_mpc)
+                tx_mid = max(-radians(20.0), min(radians(20.0), tilt_x + rate_tx * dt_mid))
+                ty_mid = max(-radians(20.0), min(radians(20.0), tilt_y + rate_ty * dt_mid))
                 a_now_xy = (
-                    a_t_sm * sin(tilt_x)
+                    a_t_sm * sin(tx_mid)
                     + float(aero_f[0]) / mass
                     + float(self._land_bxy_smooth[0])
                     + float(a_cor[0]),
-                    a_t_sm * sin(tilt_y)
+                    a_t_sm * sin(ty_mid)
                     + float(aero_f[1]) / mass
                     + float(self._land_bxy_smooth[1])
                     + float(a_cor[1]),
@@ -2652,7 +2657,7 @@ class RtlsController3D:
                     abs(degrees(roll_angle_rad(est.quat_wxyz))) > 0.8
                     or abs(degrees(est.omega_body_rad_s[2])) > 1.5
                 ):
-                    gl_acc_guard = max(gl_acc_guard, 3.4)
+                    gl_acc_guard = max(gl_acc_guard, 2.6)
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
