@@ -85,6 +85,7 @@ class CausalFdir3D:
         # Expected engine throttle & lagged chamber pressure model (7 engines)
         self._eng_thr_hat = np.zeros(7, dtype=np.float64)
         self._p_hat = np.zeros(7, dtype=np.float64)
+        self._last_chamber_p_7 = np.zeros(7, dtype=np.float64)
         self._eng_ign_timer = np.zeros(7, dtype=np.float64)
         self._eng_low_count = [0] * 7
         self._engine_lit_before: bool = False
@@ -198,6 +199,8 @@ class CausalFdir3D:
             # --- 2. Engine-Out Detection (CDR C4: zero false positives!) ---
             if pkt.engine_chamber_pressure_ratio_7 is not None:
                 p_meas = pkt.engine_chamber_pressure_ratio_7
+                for i in range(7):
+                    self._last_chamber_p_7[i] = max(0.0, float(p_meas[i]))
                 active_p = [
                     float(p_meas[i])
                     for i in range(7)
@@ -308,9 +311,12 @@ class CausalFdir3D:
                     )
                     thresh = max(radians(1.5), 1.5 * slew_step_j)
                     thresh_fast = max(radians(0.65), 1.35 * slew_step_j)
-                    if err_min > thresh or (err_min > thresh_fast and roll_kick_deg_s2 > 3.0):
+                    steady_runaway = (slew_step_j < radians(0.35)) and (err_min > radians(1.10))
+                    fast_corrob = (
+                        (err_min > thresh_fast) and (roll_kick_deg_s2 > 3.0)
+                    ) or steady_runaway
+                    if err_min > thresh or fast_corrob:
                         self._fin_err_count[j] += 1
-                        fast_corrob = (err_min > thresh_fast) and (roll_kick_deg_s2 > 3.0)
                         if self._fin_err_count[j] >= 3 or fast_corrob:
                             self.fin_jammed[j] = True
                             lead_init = 0.85 * dm_j if abs(dm_j) > radians(0.40) else 0.0
@@ -408,20 +414,32 @@ class CausalFdir3D:
         *,
         engine_mask_7: tuple[bool, ...],
         total_thrust_n: float,
+        full_thrust_7_n: float = 0.0,
     ) -> tuple[float, float, float]:
-        """Causal nominal asymmetric thrust-offset torque `(tx, ty, 0)` from known active mask."""
-        if total_thrust_n <= 1.0:
+        """Causal asymmetric thrust-offset torque `(tx, ty, 0)` from active mask + EO spindown.
+
+        Includes strictly causal residual chamber-pressure spindown thrust on failed engines
+        (`_last_chamber_p_7[i] > 0.02`) so TVC cancels slow turbopump spindown moments cleanly.
+        """
+        if total_thrust_n <= 1.0 and full_thrust_7_n <= 1.0:
             return (0.0, 0.0, 0.0)
         active_idx = [i for i in range(7) if engine_mask_7[i] and not self.engine_failed[i]]
-        if not active_idx:
-            return (0.0, 0.0, 0.0)
-        t_per = total_thrust_n / len(active_idx)
         tau_x = 0.0
         tau_y = 0.0
-        for i in active_idx:
-            nx_i, ny_i = ENGINE_NOZZLE_XY_M[i]
-            tau_x += ny_i * t_per
-            tau_y += -nx_i * t_per
+        if active_idx and total_thrust_n > 1.0:
+            t_per = total_thrust_n / len(active_idx)
+            for i in active_idx:
+                nx_i, ny_i = ENGINE_NOZZLE_XY_M[i]
+                tau_x += ny_i * t_per
+                tau_y += -nx_i * t_per
+        if full_thrust_7_n > 1.0:
+            t_one_full = full_thrust_7_n / 7.0
+            for i in range(7):
+                if self.engine_failed[i] and float(self._last_chamber_p_7[i]) > 0.02:
+                    t_res = float(self._last_chamber_p_7[i]) * t_one_full
+                    nx_i, ny_i = ENGINE_NOZZLE_XY_M[i]
+                    tau_x += ny_i * t_res
+                    tau_y += -nx_i * t_res
         return (tau_x, tau_y, 0.0)
 
     def status(self) -> FdirStatus3D:

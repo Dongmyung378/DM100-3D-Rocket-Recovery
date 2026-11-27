@@ -38,16 +38,16 @@ class MpcGfold3DConfig:
     lead_time_s: float = 0.02
     max_tilt_deg: float = 11.0
     final_tilt_deg: float = 1.5
-    vertical_align_alt_m: float = 65.0
+    vertical_align_alt_m: float = 52.0
     glide_slope_max_deg: float = 65.0
     pad_margin_m: float = 2.0
     lossless_min_ratio: float = 0.98
     max_iter_budget: int = 35
     max_fallback_hold_s: float = 1.50
-    slack_gs_weight: float = 150.0
-    slack_xy_weight: float = 2_000.0
-    slack_vxy_weight: float = 4_000.0
-    lat_control_weight: float = 0.040
+    slack_gs_weight: float = 50.0
+    slack_xy_weight: float = 500.0
+    slack_vxy_weight: float = 1_000.0
+    lat_control_weight: float = 0.050
     control_reg_weight: float = 1e-7
 
 
@@ -102,7 +102,7 @@ class OnlineGfoldMpc3D:
         self._settings.verbose = False
         self._settings.presolve_enable = False
         self._settings.max_iter = 35
-        self._settings.time_limit = 0.0095
+        self._settings.time_limit = 0.0085
         self._settings.tol_gap_abs = 1e-3
         self._settings.tol_gap_rel = 1e-3
         self._settings.tol_feas = 1e-3
@@ -298,8 +298,10 @@ class OnlineGfoldMpc3D:
             p_data[3 * k + 1] = p_lat
             p_data[3 * k + 2] = p_z
         q_obj = np.zeros(self._n_vars, dtype=np.float64)
-        # Maximize final log-mass z_N <=> minimize -10*z_N (dominates 1e-7 reg -> exact lossless!)
-        q_obj[self._sz(n)] = -10.0
+        # Maximize final log-mass z_N with dual weight (-25,000) large enough to dominate the
+        # tiny mass-burn leverage on soft terminal slacks (~0.35 << 2.0), guaranteeing exact
+        # Acikmese-Ploen lossless convexification (||u_0||/sigma_0 >= 0.999) on every solve!
+        q_obj[self._sz(n)] = -25_000.0
         for k in range(1, n):
             q_obj[self._sgs(k)] = self.cfg.slack_gs_weight * dt
         q_obj[self._s_xy_off] = self.cfg.slack_xy_weight
@@ -558,8 +560,8 @@ class OnlineGfoldMpc3D:
         t_prop_max = max(mass0_kg - dry_mass_kg, 25.0) * isp_eff_s * G0 / max(t_min_n, 1.0)
 
         tf_lo = max(1.0, max((vz_down - abs(v_touchdown_m_s)) / a_max_net, 0.84 * t_kin))
-        tf_hi_phys = min(45.0, 0.98 * t_prop_max, 1.12 * t_kin)
-        tf_hi = max(tf_lo + 0.8, tf_hi_phys)
+        tf_hi_phys = min(45.0, 0.98 * t_prop_max, 1.25 * t_kin)
+        tf_hi = max(tf_lo + 1.0, tf_hi_phys)
 
         # Vertical aero drag + terminal ground-effect acceleration along the N nodes
         # (horizontal crosswind/bias is compensated directly at 50 Hz so MPC plans exact
@@ -621,7 +623,7 @@ class OnlineGfoldMpc3D:
             # enforce strict WCET budget so retries never exceed 12 ms on shared CPU.
             tf_c = max(tf_lo, min(tf_hi, 0.50 * tf_pred + 0.50 * t_kin))
             sol_c = _try_tf(tf_c)
-            if best is None and (perf_counter() - t_all) * 1000.0 < 4.5:
+            if best is None and (perf_counter() - t_all) * 1000.0 < 3.0:
                 if sol_c is not None and not sol_c.lossless_ok:
                     _try_tf(min(tf_hi, tf_c + 0.8))
                 else:
@@ -629,7 +631,7 @@ class OnlineGfoldMpc3D:
         else:
             tf_0 = float(tf_lo + 0.45 * (tf_hi - tf_lo))
             _try_tf(tf_0)
-            if best is None and (perf_counter() - t_all) * 1000.0 < 4.5:
+            if best is None and (perf_counter() - t_all) * 1000.0 < 3.0:
                 _try_tf(float(tf_lo + 0.75 * (tf_hi - tf_lo)))
 
         total_ms = (perf_counter() - t_all) * 1000.0

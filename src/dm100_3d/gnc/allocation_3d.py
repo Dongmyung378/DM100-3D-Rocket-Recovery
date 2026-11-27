@@ -298,8 +298,8 @@ class PriorityControlAllocator3D:
                 f_rate = radians(fins.deflection_rate_deg_s)
                 f_tau_act = fins.actuator_time_constant_s
                 dt_pred = 1.5 * inp.control_dt_s
-                gate_lo = radians(0.25)
-                gate_hi = radians(0.55)
+                gate_lo = radians(0.55)
+                gate_hi = radians(1.25)
                 u_mid = np.zeros(4, dtype=np.float64)
                 for j in range(4):
                     if jam_mask[j]:

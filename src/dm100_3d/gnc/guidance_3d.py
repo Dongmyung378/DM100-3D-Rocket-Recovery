@@ -813,12 +813,16 @@ class RtlsController3D:
         if not use_xy_torque_bias:
             tb[0] = 0.0
             tb[1] = 0.0
-        # M3 causal asymmetric engine-offset moment feedforward (matches mekf.py tau_model)
+        # M3 causal asymmetric engine-offset moment feedforward (matches mekf.py tau_model +
+        # causal chamber-pressure spindown residual on recently isolated failed engines)
         if self.fdir is not None and engine_mask_7 is not None and est.engine_throttle >= 1e-3:
             t_asym = 0.5 * (cur_t + fut_t) if throttle_cmd > 1e-3 else cur_t
-            if t_asym > 1.0:
+            full_t_a, _ = compute_engine_thrust_3d(1.0, p_pa_a, self.vehicle)
+            if t_asym > 1.0 or full_t_a > 1.0:
                 asym_ff = self.fdir.causal_asymmetric_torque_ff_nm(
-                    engine_mask_7=engine_mask_7, total_thrust_n=t_asym
+                    engine_mask_7=engine_mask_7,
+                    total_thrust_n=t_asym,
+                    full_thrust_7_n=full_t_a,
                 )
                 btau_b = btau_b + np.asarray(asym_ff, dtype=np.float64)
         req_tau = i_vec * des_alpha + gyro_ff - btau_b - tb
@@ -948,7 +952,7 @@ class RtlsController3D:
                 fin_jammed_mask=fin_jam_mask,
                 fin_jammed_angles_rad=fin_jam_ang,
                 current_fin_deflection_rad=(est.fin_deflection_rad if has_fin_jam else None),
-                vb_gimbal_max_step_deg=(0.65 if self.gnc_v2.use_structural_filter else 1.6),
+                vb_gimbal_max_step_deg=(1.0 if self.gnc_v2.use_structural_filter else 1.6),
             )
         )
         # Guard pre-separation RCS torque against lighter post-separation booster inertia
@@ -1608,14 +1612,24 @@ class RtlsController3D:
                 p_xy = np.array([est.pos_enu_m[0], est.pos_enu_m[1]], dtype=np.float64)
                 v_xy = np.array([est.vel_enu_m_s[0], est.vel_enu_m_s[1]], dtype=np.float64)
                 r_xy = float(np.linalg.norm(p_xy))
-                # Gentle off-pad centering lean (<= 2.45 deg, smoothly zeroed below h = 2.2 m)
-                p_stop_xy = p_xy + 0.95 * v_xy
-                r_stop = float(np.linalg.norm(p_stop_xy))
-                vb_mid_env = (
-                    _smoothstep((h_vref - 2.2) / 3.4)
-                    * _smoothstep((r_xy - 2.0) / 2.0)
-                    * _smoothstep((r_stop - 1.2) / 1.8)
-                )
+                # Gentle off-pad centering lean (<= 2.40 deg, smoothly zeroed before final braking;
+                # v2 CSI loop uses longer 2.4 s velocity lead & h > 5 m fade so body unwinds early)
+                if self.gnc_v2.use_structural_filter:
+                    p_stop_xy = p_xy + 2.40 * v_xy
+                    r_stop = float(np.linalg.norm(p_stop_xy))
+                    vb_mid_env = (
+                        _smoothstep((h_vref - 5.0) / 7.5)
+                        * _smoothstep((r_xy - 2.0) / 2.0)
+                        * _smoothstep((r_stop - 1.5) / 2.0)
+                    )
+                else:
+                    p_stop_xy = p_xy + 0.95 * v_xy
+                    r_stop = float(np.linalg.norm(p_stop_xy))
+                    vb_mid_env = (
+                        _smoothstep((h_vref - 2.2) / 3.4)
+                        * _smoothstep((r_xy - 2.0) / 2.0)
+                        * _smoothstep((r_stop - 1.2) / 1.8)
+                    )
                 th_vb_mid = -radians(0.75) * p_stop_xy * vb_mid_env
                 mid_nrm = float(np.linalg.norm(th_vb_mid))
                 if mid_nrm > radians(2.40) and mid_nrm > 1e-12:
@@ -1660,14 +1674,24 @@ class RtlsController3D:
                 ax_lim_rcs = (
                     0.90 * self.vehicle.propulsion.rcs_torque_limit_nm / max(lever * mass, 1.0)
                 )
-                v_ground_safe = 0.14 + 0.85 * ax_lim_rcs * max(t_rem - 0.25, 0.0)
-                v_deck_cap = 0.08 + 3.4 * _smoothstep((h_vref - 0.5) / 1.65)
-                closing = min(
-                    0.82 * r_xy,
-                    sqrt(2.0 * 0.85 * ax_lim_rcs * r_xy),
-                    v_ground_safe,
-                    v_deck_cap,
-                )
+                if self.gnc_v2.use_structural_filter:
+                    v_ground_safe = 0.10 + 0.55 * ax_lim_rcs * max(t_rem - 0.50, 0.0)
+                    v_deck_cap = 0.08 + 3.0 * _smoothstep((h_vref - 0.5) / 1.8)
+                    closing = min(
+                        0.55 * r_xy,
+                        sqrt(2.0 * 0.45 * ax_lim_rcs * r_xy),
+                        v_ground_safe,
+                        v_deck_cap,
+                    )
+                else:
+                    v_ground_safe = 0.14 + 0.85 * ax_lim_rcs * max(t_rem - 0.25, 0.0)
+                    v_deck_cap = 0.08 + 3.4 * _smoothstep((h_vref - 0.5) / 1.65)
+                    closing = min(
+                        0.82 * r_xy,
+                        sqrt(2.0 * 0.85 * ax_lim_rcs * r_xy),
+                        v_ground_safe,
+                        v_deck_cap,
+                    )
                 des_v_xy = (
                     np.zeros(2, dtype=np.float64)
                     if is_abort
@@ -1688,7 +1712,11 @@ class RtlsController3D:
                 t_dec = max(0.0, vz_down - v_td) / a_dec_eff
                 t_rem_b = min(28.0, max(1.0, 0.5 * (t_kin + t_dec)))
                 t_align = max(2.75, t_rem_b - 3.85)
-                a_att_b = radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+                a_att_b = (
+                    radians(1.40)
+                    if self.gnc_v2.use_structural_filter
+                    else radians(2.44 + 0.34 * _smoothstep((self._land_bz_smooth - 0.85) / 0.22))
+                )
 
                 # Quasi-static 2-axis TVC aerodynamic trim:
                 #   tvc_tau = [lever*T*gx, -lever*T*gy, 0] cancels tau_aero_b_now
@@ -1725,7 +1753,7 @@ class RtlsController3D:
                     (rate_tx, rate_ty),
                     a_t_sm,
                     a_att_b,
-                    x_horizon_cap_s=2.4,
+                    x_horizon_cap_s=(3.0 if self.gnc_v2.use_structural_filter else 2.4),
                 )
                 r_err = max(hypot(est.pos_enu_m[0], est.pos_enu_m[1]), hypot(p_lead[0], p_lead[1]))
                 v_err = hypot(v_lead[0], v_lead[1])
@@ -1885,8 +1913,16 @@ class RtlsController3D:
             thrust_tilt_body_xy = None
 
         lit_thr = 0.5 * self.vehicle.propulsion.throttle_bounds(1)[0]
+        d_ret_lb = self._retro_dir(self._air_vel(est))
+        el_lb = est.time_s - (self.landing_started_s or est.time_s)
         if est.engine_throttle < lit_thr:
-            q_des = pointing_dir_to_quat_wxyz(self._retro_dir(self._air_vel(est)))
+            q_des = pointing_dir_to_quat_wxyz(d_ret_lb)
+        elif self.gnc_v2.use_structural_filter and el_lb < 0.75:
+            # Smoothly blend out of retrograde over 0.55 s so 3-engine divert step does not
+            # stack on top of the 0.15 s atmospheric ignition nozzle side-load pulse!
+            b_ign = _smoothstep((el_lb - 0.20) / 0.55)
+            d_u = dir_des / max(float(np.linalg.norm(dir_des)), 1e-9)
+            q_des = pointing_dir_to_quat_wxyz((1.0 - b_ign) * d_ret_lb + b_ign * d_u)
         else:
             q_des = pointing_dir_to_quat_wxyz(dir_des)
 
@@ -1905,7 +1941,10 @@ class RtlsController3D:
         if vertical_body:
             land_acc_lim = vb_acc
         elif self.gnc_v2.use_structural_filter:
-            land_acc_lim = 2.20 + 0.85 * _smoothstep((est.engine_throttle - lit_thr) / 0.15)
+            ign_acc_ramp = _smoothstep((el_lb - 0.30) / 0.55)
+            land_acc_lim = 1.35 + 1.45 * ign_acc_ramp * _smoothstep(
+                (est.engine_throttle - lit_thr) / 0.15
+            )
         else:
             land_acc_lim = 3.05
 
@@ -2528,8 +2567,8 @@ class RtlsController3D:
                 q_des = pointing_dir_to_quat_wxyz(d_des)
 
                 deploy_fins_gl = h > h_ignite + 240.0
-                gl_acc_lim = 1.5 if self.gnc_v2.use_structural_filter else 2.2
-                gl_acc_guard = 1.6 if self.gnc_v2.use_structural_filter else 2.3
+                gl_acc_lim = 1.9 if self.gnc_v2.use_structural_filter else 2.2
+                gl_acc_guard = 2.0 if self.gnc_v2.use_structural_filter else 2.3
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
