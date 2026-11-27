@@ -289,8 +289,6 @@ class CausalFdir3D:
             )
             roll_kick_deg_s2 = abs(om_z_acc_deg_s2)
             self._prev_omega_z = om_z_now
-            # Verified roll torque sign d(tau_z)/d(delta_j) for grid fins 0..3
-            fin_roll_sign = (1.0, -1.0, -1.0, 1.0)
 
             # Monitor strictly during unpowered aero-glide (q >= 400 Pa, throttle < 0.02, fins out)
             # so entry-burn SRP buffet or high-altitude coast NEVER false-triggers Fin-Jam!
@@ -322,26 +320,26 @@ class CausalFdir3D:
                         )
                         v_cur = self._fin_jam_vel_rad_s[j]
                         still_moving = (
-                            el_fj <= 0.95
+                            el_fj <= 1.05
                             and self._fin_jam_stop_count[j] < 2
-                            and abs(dm2_j) >= radians(0.20)
+                            and abs(dm2_j) >= radians(0.14)
                             and (
-                                (abs(v_cur) > radians(3.5) and (dm2_j * v_cur) > 0.0)
+                                (abs(v_cur) > radians(2.5) and (dm2_j * v_cur) > 0.0)
                                 or (
-                                    abs(v_cur) <= radians(3.5)
+                                    abs(v_cur) <= radians(2.5)
                                     and (dm_j * prev_dm_j) > 0.0
-                                    and abs(dm_j) >= radians(0.16)
+                                    and abs(dm_j) >= radians(0.14)
                                 )
                             )
                         )
-                        stall_dm2_lim = max(radians(0.32), 1.35 * abs(v_cur) * dt)
-                        single_tick_stall = abs(dm_j) < radians(0.10) and abs(dm2_j) < stall_dm2_lim
+                        stall_dm2_lim = max(radians(0.24), 1.35 * abs(v_cur) * dt)
+                        single_tick_stall = abs(dm_j) < radians(0.07) and abs(dm2_j) < stall_dm2_lim
                         if still_moving and not single_tick_stall:
                             self._fin_jam_stop_count[j] = 0
                             v_inst = max(-f_rate, min(f_rate, 0.5 * dm2_j / dt))
                             v_new = (
-                                0.65 * v_cur + 0.35 * v_inst
-                                if abs(v_cur) > radians(3.5)
+                                0.55 * v_cur + 0.45 * v_inst
+                                if abs(v_cur) > radians(2.5)
                                 else v_inst
                             )
                             pred_p = self._fin_jam_pos_rad[j] + v_cur * dt
@@ -351,33 +349,24 @@ class CausalFdir3D:
                             )
                             self._fin_jam_pos_rad[j] = pos_new
                             self._fin_jam_vel_rad_s[j] = v_new
-                            roll_dir = 1.0 if (fin_roll_sign[j] * v_new) >= 0.0 else -1.0
-                            jam_acc = om_z_acc_deg_s2 * roll_dir
-                            if el_fj >= 0.08 and jam_acc < -3.6:
-                                self._fin_jam_lead_scale[j] = max(
-                                    0.0, self._fin_jam_lead_scale[j] - 0.55
-                                )
                             # Delay-matched causal lead tracks cushioned hydraulic runaway cleanly
-                            lead_t = (
-                                min(2.35, 1.05 + 1.25 * self.total_delay_steps)
-                                * self._fin_jam_lead_scale[j]
-                                * dt
-                            )
+                            # without a gyro ratchet (which could falsely trip on normal braking).
+                            lead_t = min(2.40, 1.10 + 1.25 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, pos_new + v_new * lead_t)
                             )
                         else:
                             self._fin_jam_stop_count[j] += 1
-                            if self._fin_jam_stop_count[j] == 1 and el_fj <= 0.95:
+                            if self._fin_jam_stop_count[j] == 1 and el_fj <= 1.05:
                                 # First stall tick: drop lead immediately without corrupting
-                                # lead_scale in case of a rare 1-tick resolver noise dip.
-                                pos_s = 0.35 * self._fin_jam_pos_rad[j] + 0.65 * meas_j
+                                # tracker state in case of a rare 1-tick resolver noise dip.
+                                pos_s = 0.25 * self._fin_jam_pos_rad[j] + 0.75 * meas_j
                                 self._fin_jam_pos_rad[j] = max(-f_lim, min(f_lim, pos_s))
                                 self.fin_jam_angles_rad[j] = self._fin_jam_pos_rad[j]
                             else:
                                 self._fin_jam_vel_rad_s[j] = 0.0
                                 self._fin_jam_lead_scale[j] = 0.0
-                                alpha_p = 0.65 if el_fj <= 1.10 else 0.18
+                                alpha_p = 0.65 if el_fj <= 1.20 else 0.18
                                 pos_new = max(
                                     -f_lim,
                                     min(
