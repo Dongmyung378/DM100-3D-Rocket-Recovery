@@ -39,6 +39,18 @@ class TelemetryPacket3D:
     active_engines: int
     restarts_used: int
     packet_dropped: bool = False
+    # Optional DM100 3D v2 causal multi-sensor telemetry channels (v1 bit-exact defaults)
+    gps_valid: bool = True
+    gps_pos_enu_m: tuple[float, float, float] | None = None
+    gps_vel_enu_m_s: tuple[float, float, float] | None = None
+    attitude_valid: bool = True
+    star_tracker_valid: bool = False
+    star_tracker_quat_wxyz: tuple[float, float, float, float] | None = None
+    radar_alt_valid: bool = False
+    radar_range_m: float = 0.0
+    engine_chamber_pressure_ratio_7: (
+        tuple[float, float, float, float, float, float, float] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +65,8 @@ class ActuatorCommand3D:
     deploy_fins: bool = False
     deploy_gear: bool = False
     phase: str = "ascent"
+    engine_mask_7: tuple[bool, bool, bool, bool, bool, bool, bool] | None = None
+    engine_throttles_7: tuple[float, float, float, float, float, float, float] | None = None
 
 
 @dataclass(frozen=True, slots=True)

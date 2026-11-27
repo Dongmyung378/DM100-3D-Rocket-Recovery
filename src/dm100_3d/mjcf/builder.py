@@ -14,12 +14,31 @@ Design choices for exact 2D-to-3D equivalence and RK4 numerical stability:
 
 from __future__ import annotations
 
-from math import radians
+from math import cos, radians, sin
 from xml.etree import ElementTree as ET
 
 import mujoco
 
 from dm100_3d.config import DM100VehicleConfig, mass_properties_3d
+
+
+def compute_pad_orientation(
+    slope_deg: float, azimuth_deg: float
+) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+    """Return `(pad_normal_enu, pad_quat_wxyz)` tilted `slope_deg` toward `azimuth_deg`."""
+    th = radians(float(slope_deg))
+    if abs(th) <= 1e-12:
+        return (0.0, 0.0, 1.0), (1.0, 0.0, 0.0, 0.0)
+    az = radians(float(azimuth_deg))
+    nx = sin(th) * cos(az)
+    ny = sin(th) * sin(az)
+    nz = cos(th)
+    # Unit rotation axis from +Z to n_pad is (-sin(az), cos(az), 0)
+    s_half = sin(0.5 * th)
+    c_half = cos(0.5 * th)
+    quat = (c_half, -sin(az) * s_half, cos(az) * s_half, 0.0)
+    return (nx, ny, nz), quat
+
 
 LEG_NAMES: tuple[str, str, str, str] = ("leg_px", "leg_mx", "leg_py", "leg_my")
 FIN_NAMES: tuple[str, str, str, str] = ("fin_px", "fin_mx", "fin_py", "fin_my")
@@ -49,6 +68,10 @@ def build_dm100_mjcf_xml(
     timestep_s: float = 0.01,
     gear_deployed: bool = False,
     upper_attached: bool = True,
+    sloped_pad_enabled: bool = False,
+    pad_slope_deg: float = 0.0,
+    pad_slope_azimuth_deg: float = 0.0,
+    pad_radius_m: float = 15.0,
 ) -> str:
     """Generate parametric float64 RK4 MJCF XML string for DM100 3D."""
     cfg = vehicle or DM100VehicleConfig()
@@ -134,6 +157,28 @@ def build_dm100_mjcf_xml(
         contype="0",
         conaffinity="0",
     )
+    if sloped_pad_enabled:
+        # Finite 15 m sloped landing pad (inactive during ascent so t=0 pad is flat z=0)
+        pad_n, pad_q = compute_pad_orientation(pad_slope_deg, pad_slope_azimuth_deg)
+        half_thick = 1.0
+        px = -half_thick * pad_n[0]
+        py = -half_thick * pad_n[1]
+        pz = -half_thick * pad_n[2]
+        ET.SubElement(
+            world,
+            "geom",
+            name="sloped_pad_geom",
+            type="cylinder",
+            pos=f"{px:.8f} {py:.8f} {pz:.8f}",
+            quat=f"{pad_q[0]:.8f} {pad_q[1]:.8f} {pad_q[2]:.8f} {pad_q[3]:.8f}",
+            size=f"{float(pad_radius_m):.4f} {half_thick:.4f}",
+            material="pad_mat",
+            contype="8",
+            conaffinity="0",
+            friction=f"{gear.friction_coefficient:.4f} 0.005 0.0001",
+            solref="0.006 1.0",
+            solimp="0.95 0.99 0.001",
+        )
 
     # Booster root body: origin at hull base (station = 0.0 m)
     init_base_z = -g.nozzle_station_m
@@ -326,6 +371,10 @@ def compile_dm100_model(
     timestep_s: float = 0.01,
     gear_deployed: bool = False,
     upper_attached: bool = True,
+    sloped_pad_enabled: bool = False,
+    pad_slope_deg: float = 0.0,
+    pad_slope_azimuth_deg: float = 0.0,
+    pad_radius_m: float = 15.0,
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:
     """Build and compile the DM100 3D MuJoCo model and data pair."""
     xml = build_dm100_mjcf_xml(
@@ -333,6 +382,10 @@ def compile_dm100_model(
         timestep_s=timestep_s,
         gear_deployed=gear_deployed,
         upper_attached=upper_attached,
+        sloped_pad_enabled=sloped_pad_enabled,
+        pad_slope_deg=pad_slope_deg,
+        pad_slope_azimuth_deg=pad_slope_azimuth_deg,
+        pad_radius_m=pad_radius_m,
     )
     model = mujoco.MjModel.from_xml_string(xml)
     data = mujoco.MjData(model)

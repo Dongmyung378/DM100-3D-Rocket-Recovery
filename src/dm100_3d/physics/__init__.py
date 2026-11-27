@@ -40,6 +40,16 @@ from dm100_3d.physics.feed_3d import (
     initial_feed_state,
     separation_event_3d,
 )
+from dm100_3d.physics.flex_3d import (
+    FlexBodySettings,
+    FlexBodyState,
+    FlexModalProperties,
+    FlexStepSample,
+    compute_flex_modal_properties,
+    free_free_mode_eval,
+    project_flex_state_at_separation,
+    step_flex_body_3d,
+)
 from dm100_3d.physics.forces_3d import (
     compute_body_aero_3d,
     compute_coriolis_and_centrifugal_3d,
@@ -58,6 +68,11 @@ from dm100_3d.physics.orbit_3d import (
     UpperStageOrbitResult,
     UpperStageTrajectorySample,
     evaluate_upper_stage_orbit_3d,
+)
+from dm100_3d.physics.sensors_v2 import (
+    SensorSuiteV2,
+    SensorV2Settings,
+    compute_base_slant_radar_range_m,
 )
 from dm100_3d.physics.slosh_3d import (
     DualTankSloshResponse,
@@ -81,20 +96,33 @@ from dm100_3d.physics.srp_3d import (
     srp_nominal_cp_shift_m,
     srp_nominal_drag_multiplier,
 )
+from dm100_3d.physics.turbulence_3d import (
+    DrydenTurbulence3D,
+    DrydenTurbulenceSettings,
+    jet_shear_wind_enu,
+)
 
 __all__ = [
     "Atmosphere3DSettings",
     "AtmosphereLUT",
+    "DrydenTurbulence3D",
+    "DrydenTurbulenceSettings",
     "DualTankSloshResponse",
     "DualTankSloshSettings",
     "DualTankSloshState",
     "FeedRates",
     "FeedSettings",
     "FeedState",
+    "FlexBodySettings",
+    "FlexBodyState",
+    "FlexModalProperties",
+    "FlexStepSample",
     "GroundEffect3DSample",
     "GroundEffect3DSettings",
     "IgnitionSettings",
     "J2OrbitAudit",
+    "SensorSuiteV2",
+    "SensorV2Settings",
     "Separation3DSettings",
     "Slosh3DResponse",
     "Slosh3DSettings",
@@ -114,10 +142,12 @@ __all__ = [
     "Wind3DConfig",
     "Wind3DLUT",
     "audit_j2_orbit_one_rev",
+    "compute_base_slant_radar_range_m",
     "compute_body_aero_3d",
     "compute_coriolis_and_centrifugal_3d",
     "compute_engine_thrust_3d",
     "compute_fins_aero_3d",
+    "compute_flex_modal_properties",
     "compute_forces_and_torques_3d",
     "compute_ground_effect_3d",
     "compute_srp_effects",
@@ -129,11 +159,14 @@ __all__ = [
     "enu_to_eci_state",
     "evaluate_upper_stage_orbit_3d",
     "feed_rates",
+    "free_free_mode_eval",
     "geodetic_to_ecef",
     "ground_effect_nominal_lift_n",
     "ignition_ready",
     "initial_feed_state",
     "j2_circular_speed",
+    "jet_shear_wind_enu",
+    "project_flex_state_at_separation",
     "regularized_ring_baffle_damping",
     "rk4_step_eci_j2",
     "separation_event_3d",
@@ -143,6 +176,7 @@ __all__ = [
     "srp_nominal_cp_shift_m",
     "srp_nominal_drag_multiplier",
     "standard_atmosphere",
+    "step_flex_body_3d",
     "wgs84_coriolis_and_transport_enu",
     "wgs84_normal_gravity",
     "wgs84_radii_of_curvature",

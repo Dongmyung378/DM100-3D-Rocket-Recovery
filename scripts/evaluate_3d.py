@@ -55,6 +55,8 @@ def _resolve_physics_v2(preset: str) -> PhysicsV2Config:
         return PhysicsV2Config()
     if preset == "m1":
         return PhysicsV2Config.m1_preset()
+    if preset == "m2":
+        return PhysicsV2Config.m2_preset()
     if preset == "full":
         return PhysicsV2Config.full_v2()
     raise ValueError(f"Unknown physics v2 preset: {preset!r}")
@@ -65,6 +67,8 @@ def _resolve_gnc_v2(preset: str) -> GncV2Config:
         return GncV2Config()
     if preset == "m1":
         return GncV2Config.m1_preset()
+    if preset == "m2":
+        return GncV2Config.m2_preset()
     if preset == "full":
         return GncV2Config.full_v2()
     raise ValueError(f"Unknown gnc v2 preset: {preset!r}")
@@ -199,14 +203,14 @@ def main() -> None:
     parser.add_argument(
         "--physics-v2-preset",
         default="legacy",
-        choices=["legacy", "m1", "full"],
-        help="PhysicsV2Config preset ('legacy', 'm1', or 'full')",
+        choices=["legacy", "m1", "m2", "full"],
+        help="PhysicsV2Config preset ('legacy', 'm1', 'm2', or 'full')",
     )
     parser.add_argument(
         "--gnc-v2-preset",
         default="legacy",
-        choices=["legacy", "m1", "full"],
-        help="GncV2Config preset ('legacy', 'm1', or 'full')",
+        choices=["legacy", "m1", "m2", "full"],
+        help="GncV2Config preset ('legacy', 'm1', 'm2', or 'full')",
     )
     parser.add_argument(
         "--case-timeout-s",

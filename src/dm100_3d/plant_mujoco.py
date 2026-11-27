@@ -44,6 +44,7 @@ from dm100_3d.mjcf.builder import (
     LEG_NAMES,
     LEG_UNIT_DIRS,
     compile_dm100_model,
+    compute_pad_orientation,
 )
 
 
@@ -84,18 +85,48 @@ class MuJoCoRocketBody:
         timestep_s: float = 0.01,
         gear_deployed: bool = False,
         upper_attached: bool = True,
+        sloped_pad_enabled: bool = False,
+        pad_slope_deg: float = 0.0,
+        pad_slope_azimuth_deg: float = 0.0,
+        pad_radius_m: float = 15.0,
+        leg_stiffness_scale_4: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0),
     ) -> None:
         self.vehicle = vehicle or DM100VehicleConfig()
+        self.sloped_pad_enabled = bool(sloped_pad_enabled)
+        self.pad_slope_deg = float(pad_slope_deg) if self.sloped_pad_enabled else 0.0
+        self.pad_slope_azimuth_deg = (
+            float(pad_slope_azimuth_deg) if self.sloped_pad_enabled else 0.0
+        )
+        self.pad_radius_m = float(pad_radius_m)
+        self.leg_stiffness_scale_4 = tuple(float(v) for v in leg_stiffness_scale_4)
+        pad_n, pad_q = compute_pad_orientation(self.pad_slope_deg, self.pad_slope_azimuth_deg)
+        self.pad_normal_enu = np.asarray(pad_n, dtype=np.float64)
+        self.pad_quat_wxyz = np.asarray(pad_q, dtype=np.float64)
+
         self.model, self.data = compile_dm100_model(
             self.vehicle,
             timestep_s=timestep_s,
             gear_deployed=gear_deployed,
             upper_attached=upper_attached,
+            sloped_pad_enabled=self.sloped_pad_enabled,
+            pad_slope_deg=self.pad_slope_deg,
+            pad_slope_azimuth_deg=self.pad_slope_azimuth_deg,
+            pad_radius_m=self.pad_radius_m,
         )
 
         # Resolve MuJoCo element IDs once
         self.booster_bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "booster")
         self.ground_gid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "ground_plane")
+        self.sloped_pad_gid = (
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, "sloped_pad_geom")
+            if self.sloped_pad_enabled
+            else -1
+        )
+        self.ground_gids: frozenset[int] = (
+            frozenset({self.ground_gid, self.sloped_pad_gid})
+            if self.sloped_pad_gid >= 0
+            else frozenset({self.ground_gid})
+        )
         self.hull_gids = frozenset(
             mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, name)
             for name in ("booster_hull", "booster_nozzle")
@@ -213,7 +244,9 @@ class MuJoCoRocketBody:
             self.model.geom_contype[gid] = 4 if active else 0
             self.model.geom_conaffinity[gid] = 1 if active else 0
             self.model.jnt_range[jid] = (0.0, gear.max_leg_stroke_m if active else 1e-6)
-            self.model.jnt_stiffness[jid] = gear.per_leg_stiffness_n_m if active else 0.0
+            self.model.jnt_stiffness[jid] = (
+                gear.per_leg_stiffness_n_m * self.leg_stiffness_scale_4[i] if active else 0.0
+            )
             self.model.dof_damping[dof_adr] = gear.per_leg_damping_n_s_m if active else 0.0
 
             dz = lz - cg_tot
@@ -372,10 +405,10 @@ class MuJoCoRocketBody:
         for c_idx in range(int(self.data.ncon)):
             con = self.data.contact[c_idx]
             g1, g2 = int(con.geom1), int(con.geom2)
-            if g1 == self.ground_gid:
+            if g1 in self.ground_gids:
                 other = g2
                 sign = 1.0
-            elif g2 == self.ground_gid:
+            elif g2 in self.ground_gids:
                 other = g1
                 sign = -1.0
             else:
@@ -422,6 +455,48 @@ class MuJoCoRocketBody:
             body_ground_collision=hull_collision,
             contact_load_g=load_g,
         )
+
+    def update_ground_surface(self, *, upper_attached: bool, pos_xy_m: tuple[float, float]) -> None:
+        """Activate finite 15 m sloped pad post-separation while keeping outer terrain at z = 0."""
+        if not self.sloped_pad_enabled or self.sloped_pad_gid < 0:
+            return
+        if upper_attached:
+            # Flat z=0 launchpad during ascent (prevents t=0 nozzle penetration);
+            # bit 3 (8) keeps geom compiled as colliding while matching neither hull nor legs.
+            self.model.geom_contype[self.ground_gid] = 1
+            self.model.geom_conaffinity[self.ground_gid] = 7
+            self.model.geom_contype[self.sloped_pad_gid] = 8
+            self.model.geom_conaffinity[self.sloped_pad_gid] = 0
+            return
+        self.model.geom_contype[self.sloped_pad_gid] = 1
+        self.model.geom_conaffinity[self.sloped_pad_gid] = 7
+        r_xy = hypot(float(pos_xy_m[0]), float(pos_xy_m[1]))
+        # Disable flat z=0 plane inside pad pit so downhill sloped surface is unobstructed;
+        # outside r > pad_radius + 1.5 m, outer terrain/ocean stays strictly at z = 0.0 m.
+        if r_xy < self.pad_radius_m + 1.5:
+            self.model.geom_contype[self.ground_gid] = 8
+            self.model.geom_conaffinity[self.ground_gid] = 0
+        else:
+            self.model.geom_contype[self.ground_gid] = 1
+            self.model.geom_conaffinity[self.ground_gid] = 7
+
+    def surface_height_and_normal(
+        self, x_m: float, y_m: float, *, upper_attached: bool
+    ) -> tuple[float, NDArray[np.float64]]:
+        """Return exact local ground elevation `z_surf(x, y)` and unit normal in ENU."""
+        if (
+            upper_attached
+            or (not self.sloped_pad_enabled)
+            or hypot(float(x_m), float(y_m)) > self.pad_radius_m
+        ):
+            return 0.0, np.array([0.0, 0.0, 1.0], dtype=np.float64)
+        nx, ny, nz = (
+            float(self.pad_normal_enu[0]),
+            float(self.pad_normal_enu[1]),
+            float(self.pad_normal_enu[2]),
+        )
+        z_surf = -(nx * float(x_m) + ny * float(y_m)) / max(nz, 1e-6)
+        return float(z_surf), self.pad_normal_enu.copy()
 
     def step_physics(
         self,

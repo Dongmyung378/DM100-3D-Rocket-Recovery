@@ -77,10 +77,15 @@ def compute_body_aero_3d(
     body_offset_body_m: tuple[float, float, float] = (0.0, 0.0, 0.0),
     axial_drag_multiplier: float = 1.0,
     cp_shift_m: float = 0.0,
+    extra_wind_enu_m_s: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], float, float, float, float, float]:
     """Compute 3D body aero (f_world_n, tau_body_nm, q_pa, heat_w_m2, mach, alpha_deg, phi_deg)."""
     t_k, _, rho = atmo_lut.at(altitude_m)
     wx, wy, wz = wind_lut.at(altitude_m, time_s)
+    if extra_wind_enu_m_s != (0.0, 0.0, 0.0):
+        wx += float(extra_wind_enu_m_s[0])
+        wy += float(extra_wind_enu_m_s[1])
+        wz += float(extra_wind_enu_m_s[2])
     v_enu = np.asarray(vel_enu_m_s, dtype=np.float64).reshape(3)
     v_rel_w = np.array([v_enu[0] - wx, v_enu[1] - wy, v_enu[2] - wz], dtype=np.float64)
     speed = float(np.linalg.norm(v_rel_w))
@@ -182,6 +187,7 @@ def compute_fins_aero_3d(
     upper_attached: bool = False,
     drag_scale: float = 1.0,
     body_offset_body_m: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    extra_wind_enu_m_s: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], tuple[float, float, float, float]]:
     """Compute independent 4-grid-fin forces, body torques, and per-fin hinge moments.
 
@@ -200,6 +206,10 @@ def compute_fins_aero_3d(
 
     _, _, rho = atmo_lut.at(altitude_m)
     wx, wy, wz = wind_lut.at(altitude_m, time_s)
+    if extra_wind_enu_m_s != (0.0, 0.0, 0.0):
+        wx += float(extra_wind_enu_m_s[0])
+        wy += float(extra_wind_enu_m_s[1])
+        wz += float(extra_wind_enu_m_s[2])
     v_enu = np.asarray(vel_enu_m_s, dtype=np.float64).reshape(3)
     v_rel_w = np.array([v_enu[0] - wx, v_enu[1] - wy, v_enu[2] - wz], dtype=np.float64)
     speed_cg = float(np.linalg.norm(v_rel_w))
@@ -329,6 +339,7 @@ def compute_forces_and_torques_3d(
     body_offset_body_m: tuple[float, float, float] = (0.0, 0.0, 0.0),
     axial_drag_multiplier: float = 1.0,
     cp_shift_m: float = 0.0,
+    extra_wind_enu_m_s: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> ForceTorqueSample3D:
     """Evaluate all pure 3D external forces [N] (ENU world) and torques [N*m] (body frame)."""
     rot_wb = quat_to_rotmat(quat_wxyz)
@@ -363,6 +374,7 @@ def compute_forces_and_torques_3d(
         body_offset_body_m=body_offset_body_m,
         axial_drag_multiplier=axial_drag_multiplier,
         cp_shift_m=cp_shift_m,
+        extra_wind_enu_m_s=extra_wind_enu_m_s,
     )
     ff_w, ftau_b, hinges = compute_fins_aero_3d(
         altitude_m=altitude_m,
@@ -379,6 +391,7 @@ def compute_forces_and_torques_3d(
         upper_attached=upper_attached,
         drag_scale=drag_scale,
         body_offset_body_m=body_offset_body_m,
+        extra_wind_enu_m_s=extra_wind_enu_m_s,
     )
 
     # 2-axis conical TVC: gimbal_rad = (gamma_pitch_y, gamma_yaw_x)

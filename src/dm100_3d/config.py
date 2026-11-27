@@ -296,6 +296,33 @@ class PhysicsV2Config:
     booster_dry_mass_scale: float = 1.0
     dual_tank_geometry: DualTankGeometry = field(default_factory=DualTankGeometry)
 
+    # M2 flex-body, Dryden/jet turbulence, sloped pad, and sensor v2 parameters
+    flex_freq_mode1_scale: float = 1.0
+    flex_freq_mode2_scale: float = 1.0
+    flex_damping_scale: float = 1.0
+    dryden_sigma_m_s: float = 1.5
+    jet_shear_peak_m_s: float = 0.0
+    jet_shear_azimuth_deg: float = 0.0
+    jet_shear_alt_m: float = 10_500.0
+    jet_shear_thickness_m: float = 1_800.0
+    pad_slope_deg: float = 0.0
+    pad_slope_azimuth_deg: float = 0.0
+    pad_radius_m: float = 15.0
+    leg_stiffness_scale_4: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)
+    gps_blackout_duration_s: float = 0.0
+    gps_blackout_heat_flux_w_m2: float = 10_000.0
+    gps_blackout_alt_min_m: float = 35_000.0
+    gps_blackout_alt_max_m: float = 65_000.0
+    gyro_arw_scale: float = 1.0
+    accel_vrw_scale: float = 1.0
+    gyro_scale_err_ppm: float = 0.0
+    accel_scale_err_ppm: float = 0.0
+    gyro_nonortho_deg: float = 0.0
+    accel_nonortho_deg: float = 0.0
+    radar_alt_noise_scale: float = 1.0
+    fin_resolver_noise_deg: float = 0.10
+    prop_gauge_noise_kg: float = 25.0
+
     def any_enabled(self) -> bool:
         return any(
             (
@@ -319,6 +346,20 @@ class PhysicsV2Config:
             dual_tank_slosh=True,
             srp_interference=True,
             ground_effect=True,
+        )
+
+    @classmethod
+    def m2_preset(cls) -> PhysicsV2Config:
+        """Enable Phase 7A+7B (M1+M2): flex, Dryden, finite sloped pad, and 500->50 Hz sensors."""
+        return cls(
+            earth_wgs84_j2=True,
+            dual_tank_slosh=True,
+            srp_interference=True,
+            ground_effect=True,
+            flex_body=True,
+            dryden_turbulence=True,
+            sloped_pad=True,
+            sensors_v2=True,
         )
 
     @classmethod
@@ -366,6 +407,18 @@ class GncV2Config:
             use_dual_tank_mass_props=True,
             use_srp_iip_feedforward=True,
             use_ground_effect_feedforward=True,
+        )
+
+    @classmethod
+    def m2_preset(cls) -> GncV2Config:
+        """Enable causal M1+M2 GNC: Elliptic CSI filter, Matched DOB, and Strapdown MEKF v2."""
+        return cls(
+            use_wgs84_gravity=True,
+            use_dual_tank_mass_props=True,
+            use_srp_iip_feedforward=True,
+            use_ground_effect_feedforward=True,
+            use_structural_filter=True,
+            use_strapdown_mekf=True,
         )
 
     @classmethod
