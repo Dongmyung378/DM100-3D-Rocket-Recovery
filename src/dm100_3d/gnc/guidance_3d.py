@@ -209,6 +209,7 @@ class RtlsController3D:
         self._land_bz_smooth: float = 0.0
         self._vb_wind_trim_xy: NDArray[np.float64] = np.zeros(2, dtype=np.float64)
         self._eb_steer_xy_deg: NDArray[np.float64] = np.zeros(2, dtype=np.float64)
+        self._eb_iip_vel_xy_m_s: NDArray[np.float64] = np.zeros(2, dtype=np.float64)
         self._glide_alpha_xy_deg: NDArray[np.float64] = np.zeros(2, dtype=np.float64)
         self.cached_drag_scale: float = 1.0
         self.last_iip_time_s: float = -1e9
@@ -988,7 +989,8 @@ class RtlsController3D:
         shutdown_delay = (
             self.sensor_config.observation_delay_steps + self.sensor_config.action_delay_steps + 1
         ) * s.control_dt_s + 0.05
-        shutdown_res = full_flow * shutdown_delay + 20.0
+        gauge_margin_kg = 85.0 if self.gnc_v2.use_strapdown_mekf else 0.0
+        shutdown_res = full_flow * shutdown_delay + 20.0 + gauge_margin_kg
         if (
             est.main_propellant_kg <= ag.separation_min_main_propellant_kg + shutdown_res
             or est.pos_enu_m[2] >= ag.separation_altitude_m + 0.75 * ag.separation_tolerance_m
@@ -1345,13 +1347,37 @@ class RtlsController3D:
                     th_vb_mid *= radians(2.40) / mid_nrm
                 # In v2 dual-tank configuration, the higher LOX-dominant CG (~9.1 m vs 7.3 m)
                 # increases post-touchdown 4-leg rocking inertia; taper upwind body lean smoothly
-                # to vertical before touchdown while TVC+RCS holds lateral pad position.
-                wt_taper = (
-                    _smoothstep((h_vref - 2.5) / 6.5)
-                    if self.gnc_v2.use_dual_tank_mass_props
-                    else 1.0
-                )
-                vb_dir_xy = self._vb_wind_trim_xy * wt_taper + th_vb_mid
+                # before touchdown. Under M2 Dryden turbulence + CSI gains, pre-trim to the causal
+                # 4-leg static wind-lean equilibrium (capped <= 1.45 deg) to eliminate the initial
+                # downwind rocking step excitation while TVC+RCS holds lateral pad position.
+                if self.gnc_v2.use_structural_filter:
+                    wt_taper = _smoothstep((h_vref - 12.0) / 10.0)
+                    gear = self.vehicle.landing_gear
+                    arm_cp = (
+                        self.vehicle.aerodynamics.pressure_center_descent_m - gear.foot_station_m
+                    )
+                    k_rot = max(
+                        2.0 * gear.per_leg_stiffness_n_m * (gear.half_span_m**2)
+                        - mass * g_loc * (cg - gear.foot_station_m),
+                        250_000.0,
+                    )
+                    # Causal surface wind lateral force (forecast + damped MEKF wind offset so
+                    # brief pre-touchdown Dryden lulls do not under-trim steady mean wind lean)
+                    f_wind_xy = bf0_w[0:2] + 0.5 * mass * self._land_bxy_smooth
+                    th_eq_xy = (arm_cp / k_rot) * f_wind_xy
+                    eq_nrm = float(np.linalg.norm(th_eq_xy))
+                    eq_cap = radians(1.45)
+                    if eq_nrm > eq_cap and eq_nrm > 1e-12:
+                        th_eq_xy *= eq_cap / eq_nrm
+                    vb_dir_xy = (
+                        self._vb_wind_trim_xy * wt_taper + th_eq_xy * (1.0 - wt_taper) + th_vb_mid
+                    )
+                elif self.gnc_v2.use_dual_tank_mass_props:
+                    wt_taper = _smoothstep((h_vref - 2.5) / 6.5)
+                    vb_dir_xy = self._vb_wind_trim_xy * wt_taper + th_vb_mid
+                else:
+                    wt_taper = 1.0
+                    vb_dir_xy = self._vb_wind_trim_xy * wt_taper + th_vb_mid
                 vb_nrm = float(np.linalg.norm(vb_dir_xy))
                 if vb_nrm > radians(2.55) and vb_nrm > 1e-12:
                     vb_dir_xy *= radians(2.55) / vb_nrm
@@ -1552,7 +1578,10 @@ class RtlsController3D:
 
         land_rate_lim = 9.0
         if vertical_body and degrees(tilt_angle_rad(est.quat_wxyz)) < 2.9:
-            land_rate_lim = 0.25 + 5.75 * _smoothstep((h_vref - 0.65) / 3.1)
+            if self.gnc_v2.use_structural_filter:
+                land_rate_lim = 0.35 + 5.65 * _smoothstep((h_vref - 0.40) / 2.0)
+            else:
+                land_rate_lim = 0.25 + 5.75 * _smoothstep((h_vref - 0.65) / 3.1)
         vb_blend = (
             _smoothstep((est.time_s - (self._vb_started_s or est.time_s)) / 0.28)
             if vertical_body
@@ -1570,7 +1599,7 @@ class RtlsController3D:
             thrust_tilt_cmd_body_xy=thrust_tilt_body_xy,
             high_q_guard=False,
             accel_guard_deg_s2=vb_acc if vertical_body else 3.05,
-            use_xy_torque_bias=(not vertical_body),
+            use_xy_torque_bias=(not vertical_body) or self.gnc_v2.use_structural_filter,
         )
         if est.engine_throttle < lit_thr:
             gim = (0.0, 0.0)
@@ -1857,16 +1886,48 @@ class RtlsController3D:
                         handoff_z_m=100.0,
                         dt=0.35,
                     )
+                    dt_iip = est.time_s - self.last_iip_time_s
+                    if 0.05 <= dt_iip <= 2.0:
+                        raw_v_iip = np.clip(
+                            np.array(
+                                [
+                                    (xi - self.cached_iip_xy_m[0]) / dt_iip,
+                                    (yi - self.cached_iip_xy_m[1]) / dt_iip,
+                                ],
+                                dtype=np.float64,
+                            ),
+                            -250.0,
+                            250.0,
+                        )
+                        self._eb_iip_vel_xy_m_s += (1.0 - exp(-dt_iip / 0.65)) * (
+                            raw_v_iip - self._eb_iip_vel_xy_m_s
+                        )
+                    else:
+                        self._eb_iip_vel_xy_m_s[:] = 0.0
                     self.cached_iip_xy_m = (xi, yi)
                     self.last_iip_time_s = est.time_s
 
                 eb_el = est.time_s - (self.entry_burn_started_s or est.time_s)
                 eb_ramp = _smoothstep(eb_el / 0.85)
                 eb_lim = 9.0 if q_pa < 14_000.0 else (6.0 if q_pa < 24_000.0 else 3.5)
-                q_taper = _smoothstep((pq - s.entry_q_cutoff_pa) / 6_500.0)
                 err_xy = np.array([self.cached_iip_xy_m[0] + 150.0, self.cached_iip_xy_m[1]])
-                raw_st = np.clip(-0.040 * err_xy, -eb_lim, eb_lim) * q_taper * eb_ramp
-                self._eb_steer_xy_deg += (1.0 - exp(-s.control_dt_s / 0.45)) * (
+                if self.gnc_v2.use_structural_filter:
+                    # CSI-certified softer booster loop (kp=0.55, kd=1.65) has ~3 s settling lag;
+                    # use causal PD phase-lead on IIP velocity + circular 6 deg cap + earlier cutoff
+                    # taper to eliminate entry-burn coning & slosh wall rebound at MECO-2.
+                    eb_lim_v2 = min(eb_lim, 6.0)
+                    q_taper = _smoothstep((pq - (s.entry_q_cutoff_pa + 1_500.0)) / 7_500.0)
+                    err_lead = err_xy + 3.2 * self._eb_iip_vel_xy_m_s
+                    raw_st = -0.012 * err_lead * q_taper * eb_ramp
+                    st_nrm = float(np.linalg.norm(raw_st))
+                    if st_nrm > eb_lim_v2 and st_nrm > 1e-9:
+                        raw_st *= eb_lim_v2 / st_nrm
+                    tau_eb_st = 0.70
+                else:
+                    q_taper = _smoothstep((pq - s.entry_q_cutoff_pa) / 6_500.0)
+                    raw_st = np.clip(-0.040 * err_xy, -eb_lim, eb_lim) * q_taper * eb_ramp
+                    tau_eb_st = 0.45
+                self._eb_steer_xy_deg += (1.0 - exp(-s.control_dt_s / tau_eb_st)) * (
                     raw_st - self._eb_steer_xy_deg
                 )
                 d_des = d_ret + np.array(
