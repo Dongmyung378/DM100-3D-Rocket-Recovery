@@ -33,6 +33,15 @@ class Atmosphere3DSettings:
     coriolis_enabled: bool = True
     planar_coriolis_only: bool = False
     density_scale: float = 1.0
+    upper_air_density_scale: float = 1.0
+
+
+def _upper_air_density_factor(altitude_m: float, upper_scale: float) -> float:
+    """Smoothstep upper-air density multiplier for h > 10 km (zero double-counting with T0/P0)."""
+    if upper_scale == 1.0 or altitude_m <= 10_000.0:
+        return 1.0
+    u = min(1.0, (altitude_m - 10_000.0) / 4_000.0)
+    return 1.0 + (upper_scale - 1.0) * (u * u * (3.0 - 2.0 * u))
 
 
 def standard_atmosphere(
@@ -56,6 +65,8 @@ def standard_atmosphere(
             else:
                 p_pa *= (t_k / t0) ** (-G0 / (R_AIR * lapse))
             rho = (p_pa / (R_AIR * t_k)) * s.density_scale
+            if s.upper_air_density_scale != 1.0:
+                rho *= _upper_air_density_factor(h, s.upper_air_density_scale)
             return t_k, p_pa, rho
         dh_full = h_next - h0
         t_next = max(120.0, t0 + lapse * dh_full)
@@ -66,6 +77,8 @@ def standard_atmosphere(
 
     t_top = max(120.0, _STD_LAYERS[-1][1] + t_offset)
     rho = (p_pa / (R_AIR * t_top)) * s.density_scale
+    if s.upper_air_density_scale != 1.0:
+        rho *= _upper_air_density_factor(h, s.upper_air_density_scale)
     return t_top, p_pa, rho
 
 

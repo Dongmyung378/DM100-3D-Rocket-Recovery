@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from math import acos, degrees, exp, hypot, isfinite, radians, sin
+from typing import Any
 
 import numpy as np
 
@@ -100,6 +101,8 @@ class Disturbances3D:
     drag_scale: float = 1.0
     initial_mass_scale: float = 1.0
     inertia_scale: float = 1.0
+    inertia_roll_scale: float | None = None
+    propellant_load_scale: float = 1.0
     engine_lag_s: float = 0.0
     roll_disturbance_torque_nm: float = 0.0
     roll_disturbance_start_s: float = 260.0
@@ -132,6 +135,7 @@ class Scenario3D:
     seed: int = 378
     physics_v2: PhysicsV2Config | None = None
     expected_mission_mode: str | None = None
+    suite_metadata: dict[str, Any] | None = None
 
 
 class MuJoCoPlant3D:
@@ -279,7 +283,21 @@ class MuJoCoPlant3D:
         self.engine_tau_s = max(self.vehicle.propulsion.nominal_engine_tau_s, dist.engine_lag_s)
 
         # Dynamic plant state
-        self.main_prop_kg: float = self.vehicle.propellant.main_propellant_kg
+        if dist.propellant_load_scale != 1.0:
+            raw_prop = self.vehicle.propellant.main_propellant_kg * max(
+                0.85, float(dist.propellant_load_scale)
+            )
+            if pv2.dual_tank_slosh:
+                # Cap at 98% of 91.0 m^3 dual-tank volume so positive helium ullage is guaranteed
+                max_prop = (
+                    0.98
+                    * pv2.dual_tank_geometry.total_tank_volume_m3
+                    * pv2.dual_tank_geometry.bulk_propellant_density_kg_m3
+                )
+                raw_prop = min(raw_prop, max_prop)
+            self.main_prop_kg = raw_prop
+        else:
+            self.main_prop_kg = self.vehicle.propellant.main_propellant_kg
         self.rcs_prop_kg: float = self.vehicle.propellant.rcs_propellant_kg
         self.feed_state: FeedState = initial_feed_state(self.main_prop_kg, self.feed_settings)
         self.slosh_state: Slosh3DState = Slosh3DState()
@@ -323,6 +341,7 @@ class MuJoCoPlant3D:
             upper_attached=True,
             airframe_mass_offset_kg=self.airframe_mass_offset_kg,
             inertia_scale=dist.inertia_scale,
+            inertia_roll_scale=dist.inertia_roll_scale,
             dual_tank=pv2.dual_tank_slosh,
             rcs_propellant_kg=self.rcs_prop_kg if pv2.dual_tank_slosh else None,
             dual_tank_geom=pv2.dual_tank_geometry if pv2.dual_tank_slosh else None,
@@ -792,6 +811,7 @@ class MuJoCoPlant3D:
             upper_attached=False,
             airframe_mass_offset_kg=self.airframe_mass_offset_kg,
             inertia_scale=dist.inertia_scale,
+            inertia_roll_scale=dist.inertia_roll_scale,
             dual_tank=pv2.dual_tank_slosh,
             rcs_propellant_kg=self.rcs_prop_kg if pv2.dual_tank_slosh else None,
             dual_tank_geom=pv2.dual_tank_geometry if pv2.dual_tank_slosh else None,
@@ -982,6 +1002,7 @@ class MuJoCoPlant3D:
                 upper_attached=self.upper_attached,
                 airframe_mass_offset_kg=self.airframe_mass_offset_kg,
                 inertia_scale=dist.inertia_scale,
+                inertia_roll_scale=dist.inertia_roll_scale,
                 dual_tank=pv2.dual_tank_slosh,
                 rcs_propellant_kg=self.rcs_prop_kg if pv2.dual_tank_slosh else None,
                 dual_tank_geom=pv2.dual_tank_geometry if pv2.dual_tank_slosh else None,
@@ -1926,6 +1947,8 @@ def run_flight_3d(
     summary["socp_solver_used"] = diag.socp_solver_used
     summary["socp_solver_status"] = diag.socp_solver_status
     summary["socp_solve_ms"] = diag.socp_solve_ms
+    if scen.suite_metadata is not None:
+        summary["suite_metadata"] = dict(scen.suite_metadata)
     if scfg.gnc_v2.any_enabled() and isinstance(ctrl, RtlsController3D):
         summary["expected_mission_mode"] = scen.expected_mission_mode
         if ctrl.online_mpc is not None:

@@ -163,7 +163,7 @@ class RtlsController3D:
         self.vehicle = vehicle or DM100VehicleConfig()
         self.gnc_v2 = gnc_v2 or GncV2Config()
         base_atmo = atmo_settings or Atmosphere3DSettings()
-        # Causal forecast atmosphere NEVER sees hidden density_scale != 1.0
+        # Causal forecast atmosphere NEVER sees hidden density_scale or upper_air_density_scale != 1
         self.forecast_atmo_settings = Atmosphere3DSettings(
             sea_level_temperature_k=base_atmo.sea_level_temperature_k,
             sea_level_pressure_pa=base_atmo.sea_level_pressure_pa,
@@ -171,6 +171,7 @@ class RtlsController3D:
             coriolis_enabled=base_atmo.coriolis_enabled,
             planar_coriolis_only=base_atmo.planar_coriolis_only,
             density_scale=1.0,
+            upper_air_density_scale=1.0,
         )
         self.forecast_atmo = AtmosphereLUT(self.forecast_atmo_settings, step_m=100.0)
         self.forecast_wind = Wind3DLUT(wind_config or Wind3DConfig(), forecast=True)
