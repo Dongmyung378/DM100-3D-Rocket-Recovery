@@ -298,7 +298,7 @@ class PriorityControlAllocator3D:
             if inp.current_fin_deflection_rad is not None:
                 f_rate = radians(fins.deflection_rate_deg_s)
                 f_tau_act = fins.actuator_time_constant_s
-                dt_pred = 1.5 * inp.control_dt_s
+                dt_pred = 2.0 * inp.control_dt_s
                 # Tight slew ramp during first 0.65 s of jam recovery for smooth RCS handoff,
                 # then smoothly widen to [0.75, 1.45] deg so steady resolver noise never chatters.
                 el_j = inp.fin_jam_elapsed_s if inp.fin_jam_elapsed_s is not None else 0.0

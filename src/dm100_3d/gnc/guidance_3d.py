@@ -573,8 +573,9 @@ class RtlsController3D:
             else:
                 r_orb = EARTH_RADIUS_M + (z if z > 0.0 else 0.0)
                 a_cent_z = (vx * vx + vy * vy) / r_orb
-            ax = fx / mid_m - 2.0 * (om_y * vz - om_z * vy) + (bx if z < 14_000.0 else 0.0)
-            ay = fy / mid_m - 2.0 * (om_z * vx) + (by if z < 14_000.0 else 0.0)
+            bias_alt_m = 7_000.0 if self.gnc_v2.use_structural_filter else 14_000.0
+            ax = fx / mid_m - 2.0 * (om_y * vz - om_z * vy) + (bx if z < bias_alt_m else 0.0)
+            ay = fy / mid_m - 2.0 * (om_z * vx) + (by if z < bias_alt_m else 0.0)
             az = fz / mid_m - self._gravity(z) + 2.0 * om_y * vx + a_cent_z
             x += vx * step + 0.5 * ax * step * step
             y += vy * step + 0.5 * ay * step * step
@@ -2532,7 +2533,7 @@ class RtlsController3D:
                 hi_z_cap = 6.0 + (s.glide_max_alpha_deg - 6.0) * (
                     1.0 - _smoothstep((est.pos_enu_m[2] - 19_000.0) / 8_000.0)
                 )
-                q_drop = 9.0 if self.gnc_v2.use_structural_filter else 7.5
+                q_drop = 11.5 if self.gnc_v2.use_structural_filter else 7.5
                 q_cap = min(
                     hi_z_cap,
                     s.glide_max_alpha_deg - q_drop * _smoothstep((q_pa - 3_500.0) / 6_500.0),
