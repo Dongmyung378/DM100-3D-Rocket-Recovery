@@ -336,7 +336,8 @@ class CausalEstimator3D:
             dur = min(end, pkt.time_s) - begin
             if dur <= 0.0:
                 continue
-            thr = cmd.throttle_cmd + (thr - cmd.throttle_cmd) * exp(-dur / e_tau)
+            if (not self.gnc_v2.use_strapdown_mekf) or (pkt.engine_throttle >= 1e-3):
+                thr = cmd.throttle_cmd + (thr - cmd.throttle_cmd) * exp(-dur / e_tau)
             for i in range(2):
                 gim[i] = cmd.gimbal_rad[i] + (gim[i] - cmd.gimbal_rad[i]) * exp(-dur / g_tau)
             for i in range(4):
