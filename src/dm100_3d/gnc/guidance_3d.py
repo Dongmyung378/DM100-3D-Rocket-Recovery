@@ -2717,11 +2717,7 @@ class RtlsController3D:
                     0.0,
                     rate_limit_deg_s=9.0,
                     accel_limit_deg_s2=gl_acc_lim,
-                    allow_fin=(
-                        (deploy_fins_gl or est.fin_extension >= 0.25)
-                        if (self.gnc_v2.use_structural_filter and not has_fj_gl)
-                        else True
-                    ),
+                    allow_fin=True,
                     rcs_deadband_nm=(
                         3_500.0
                         if has_fj_gl
