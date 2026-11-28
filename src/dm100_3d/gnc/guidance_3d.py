@@ -2025,7 +2025,7 @@ class RtlsController3D:
             ign_acc_ramp = _smoothstep((el_lb - 0.30) / 0.55)
             # Ramp across 1-engine ignition spool-up [lit_thr -> lit_thr + 0.030] while keeping
             # the initial 0.30 s 3-engine atmospheric ignition side-load pulse softly guarded.
-            land_acc_lim = 0.90 + 1.90 * ign_acc_ramp * _smoothstep(
+            land_acc_lim = 0.85 + 1.95 * ign_acc_ramp * _smoothstep(
                 (est.engine_throttle - lit_thr) / 0.030
             )
         else:
@@ -2046,11 +2046,7 @@ class RtlsController3D:
             thrust_tilt_cmd_body_xy=thrust_tilt_body_xy,
             high_q_guard=False,
             accel_guard_deg_s2=land_acc_lim,
-            use_xy_torque_bias=(
-                (el_lb > 0.35)
-                if (self.gnc_v2.use_structural_filter and not vertical_body)
-                else ((not vertical_body) or self.gnc_v2.use_structural_filter)
-            ),
+            use_xy_torque_bias=(not vertical_body) or self.gnc_v2.use_structural_filter,
             engine_mask_7=land_mask_7,
         )
         if est.engine_throttle < lit_thr:
