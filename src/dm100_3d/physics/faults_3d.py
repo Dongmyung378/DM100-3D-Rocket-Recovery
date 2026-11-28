@@ -417,10 +417,10 @@ class EngineClusterFaultModel3D:
                 self._fin_jam_locked[j] = False
 
         # Physical hydraulic runaway rate derating & viscous hinge-load cushioning
-        # (60 deg/s crisp stop at q=0; ~16..27 deg/s & 0.16 s hydraulic cushion at high q)
+        # (60 deg/s crisp stop at q=0; ~18..29 deg/s & 0.16 s hydraulic cushion at high q)
         q_pos = max(0.0, float(dynamic_pressure_pa))
-        jam_rate_eff = fin_rate_rad_s / (1.0 + q_pos / 11_000.0)
-        tau_jam = max(fin_tau_s * (0.25 + 1.75 * min(1.0, q_pos / 11_000.0)), 1e-3)
+        jam_rate_eff = fin_rate_rad_s / (1.0 + q_pos / 12_500.0)
+        tau_jam = max(fin_tau_s * (0.25 + 1.75 * min(1.0, q_pos / 12_500.0)), 1e-3)
         alpha_jam = 1.0 - exp(-dt_s / tau_jam)
         out = list(fin_deflection)
         for i in range(4):

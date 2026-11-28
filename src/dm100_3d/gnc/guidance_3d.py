@@ -817,6 +817,19 @@ class RtlsController3D:
         if not use_xy_torque_bias:
             tb[0] = 0.0
             tb[1] = 0.0
+        elif (
+            self.gnc_v2.use_structural_filter
+            and throttle_cmd <= 1e-3
+            and (not est.upper_attached)
+            and q_pa > 5_000.0
+            and not (self.fdir is not None and any(self.fdir.fin_jammed))
+        ):
+            # Cap unpowered high-q glide P/Y DOB at 38 kNm (~2.1 deg/s^2) so brief supersonic
+            # Dryden gust windup cannot kick back > 5 deg/s^2 when the gust reverses.
+            tb_xy_nrm = hypot(float(tb[0]), float(tb[1]))
+            if tb_xy_nrm > 38_000.0:
+                tb[0] *= 38_000.0 / tb_xy_nrm
+                tb[1] *= 38_000.0 / tb_xy_nrm
         if (
             self.fdir is not None
             and any(self.fdir.fin_jammed)
@@ -1900,6 +1913,7 @@ class RtlsController3D:
             lever = max(cg - self.vehicle.geometry.nozzle_station_m, 1.0)
             vb_lat_scale = (
                 _smoothstep((est.time_s - (self._vb_started_s or est.time_s)) / 0.45)
+                * (0.35 + 0.65 * _smoothstep((h_vref - 0.50) / 1.50))
                 if self.gnc_v2.use_structural_filter
                 else 1.0
             )
@@ -2592,17 +2606,15 @@ class RtlsController3D:
                 )
                 if self.gnc_v2.use_structural_filter:
                     # Two-stage aerodynamic AoA envelope (v2):
-                    # - Subsonic low-q (z <= 10 km, q <= 9 kPa): 9.5..10.1 deg authority for
+                    # - Subsonic low-q (q <= 9.0 kPa, z ~ 1..7 km): 9.5..10.1 deg authority for
                     #   post-blackout crossrange closure without high-q slosh-CG roll coupling.
-                    # - High-altitude supersonic entry into peak-q (z > 10 km): begin tapering at
-                    #   q=6.5 kPa so slow CSI attitude loop unwinds before transonic/high-q Dryden.
-                    q2_start = 6_500.0 if est.pos_enu_m[2] > 10_000.0 else 9_000.0
-                    q2_span = 3_500.0 if est.pos_enu_m[2] > 10_000.0 else 2_000.0
+                    # - Transonic/supersonic high-q (q >= 11.0 kPa, z ~ 8..25 km): 4.5 deg cap
+                    #   suppresses q*alpha^2 roll torque in jet-shear/Dryden & fin-jam glide.
                     q_cap = min(
                         hi_z_cap,
                         s.glide_max_alpha_deg
                         - 6.5 * _smoothstep((q_pa - 3_500.0) / 5_500.0)
-                        - 5.0 * _smoothstep((q_pa - q2_start) / q2_span),
+                        - 5.0 * _smoothstep((q_pa - 9_000.0) / 2_000.0),
                     )
                 else:
                     q_cap = min(
@@ -2689,7 +2701,7 @@ class RtlsController3D:
                         if (self.fdir is not None and self.fdir.fin_jam_detected_time_s is not None)
                         else 0.0
                     )
-                    gl_acc_guard = max(gl_acc_guard, 2.9 if el_fj_gl > 1.00 else 2.25)
+                    gl_acc_guard = max(gl_acc_guard, 2.75 if el_fj_gl > 1.10 else 2.25)
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,
