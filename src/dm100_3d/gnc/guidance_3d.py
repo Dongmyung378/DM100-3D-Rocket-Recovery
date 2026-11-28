@@ -817,19 +817,6 @@ class RtlsController3D:
         if not use_xy_torque_bias:
             tb[0] = 0.0
             tb[1] = 0.0
-        elif (
-            self.gnc_v2.use_structural_filter
-            and throttle_cmd <= 1e-3
-            and (not est.upper_attached)
-            and q_pa > 5_000.0
-            and not (self.fdir is not None and any(self.fdir.fin_jammed))
-        ):
-            # Cap unpowered high-q glide P/Y DOB at 38 kNm (~2.1 deg/s^2) so brief supersonic
-            # Dryden gust windup cannot kick back > 5 deg/s^2 when the gust reverses.
-            tb_xy_nrm = hypot(float(tb[0]), float(tb[1]))
-            if tb_xy_nrm > 38_000.0:
-                tb[0] *= 38_000.0 / tb_xy_nrm
-                tb[1] *= 38_000.0 / tb_xy_nrm
         if (
             self.fdir is not None
             and any(self.fdir.fin_jammed)
@@ -1913,7 +1900,6 @@ class RtlsController3D:
             lever = max(cg - self.vehicle.geometry.nozzle_station_m, 1.0)
             vb_lat_scale = (
                 _smoothstep((est.time_s - (self._vb_started_s or est.time_s)) / 0.45)
-                * (0.35 + 0.65 * _smoothstep((h_vref - 0.50) / 1.50))
                 if self.gnc_v2.use_structural_filter
                 else 1.0
             )
@@ -2701,7 +2687,7 @@ class RtlsController3D:
                         if (self.fdir is not None and self.fdir.fin_jam_detected_time_s is not None)
                         else 0.0
                     )
-                    gl_acc_guard = max(gl_acc_guard, 2.75 if el_fj_gl > 1.10 else 2.25)
+                    gl_acc_guard = max(gl_acc_guard, 2.9 if el_fj_gl > 1.00 else 2.25)
                 gim, rcs, fins = self._attitude_allocate_3d(
                     est,
                     q_des,

@@ -350,8 +350,8 @@ class CausalFdir3D:
                             self._fin_jam_pos_rad[j] = pos_new
                             self._fin_jam_vel_rad_s[j] = v_new
                             # Delay-matched causal lead tracks cushioned hydraulic runaway cleanly
-                            # without a gyro ratchet (1.62 ticks @ delay=0, 2.28 @ delay=1).
-                            lead_t = min(2.30, 1.62 + 0.66 * self.total_delay_steps) * dt
+                            # without a gyro ratchet (1.55 ticks @ delay=0, 2.20 @ delay=1).
+                            lead_t = min(2.30, 1.55 + 0.65 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, pos_new + v_new * lead_t)
                             )
@@ -423,7 +423,7 @@ class CausalFdir3D:
                             v0 = (dm_j / dt) if abs(dm_j) > radians(0.18) else 0.0
                             v0 = max(-f_rate, min(f_rate, v0))
                             self._fin_jam_vel_rad_s[j] = v0
-                            lead_t0 = min(2.30, 1.62 + 0.66 * self.total_delay_steps) * dt
+                            lead_t0 = min(2.30, 1.55 + 0.65 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + v0 * lead_t0)
                             )
