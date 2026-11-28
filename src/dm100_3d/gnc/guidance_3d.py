@@ -2023,9 +2023,9 @@ class RtlsController3D:
             land_acc_lim = vb_acc
         elif self.gnc_v2.use_structural_filter:
             ign_acc_ramp = _smoothstep((el_lb - 0.30) / 0.55)
-            # Ramp across 1-engine ignition spool-up [lit_thr -> lit_thr + 0.030] so single-engine
-            # powered descent (thr ~ 0.055..0.14) receives full 2.80 deg/s^2 attitude authority.
-            land_acc_lim = 1.35 + 1.45 * ign_acc_ramp * _smoothstep(
+            # Ramp across 1-engine ignition spool-up [lit_thr -> lit_thr + 0.030] while keeping
+            # the initial 0.30 s 3-engine atmospheric ignition side-load pulse softly guarded.
+            land_acc_lim = 0.90 + 1.90 * ign_acc_ramp * _smoothstep(
                 (est.engine_throttle - lit_thr) / 0.030
             )
         else:
@@ -2046,7 +2046,11 @@ class RtlsController3D:
             thrust_tilt_cmd_body_xy=thrust_tilt_body_xy,
             high_q_guard=False,
             accel_guard_deg_s2=land_acc_lim,
-            use_xy_torque_bias=(not vertical_body) or self.gnc_v2.use_structural_filter,
+            use_xy_torque_bias=(
+                (el_lb > 0.35)
+                if (self.gnc_v2.use_structural_filter and not vertical_body)
+                else ((not vertical_body) or self.gnc_v2.use_structural_filter)
+            ),
             engine_mask_7=land_mask_7,
         )
         if est.engine_throttle < lit_thr:
@@ -2610,16 +2614,16 @@ class RtlsController3D:
                     1.0 - _smoothstep((est.pos_enu_m[2] - 19_000.0) / 8_000.0)
                 )
                 if self.gnc_v2.use_structural_filter:
-                    # Two-stage aerodynamic AoA envelope (v2):
-                    # - Subsonic low-q (q <= 9.0 kPa, z ~ 1..7 km): 9.5..10.1 deg authority for
-                    #   post-blackout crossrange closure without high-q slosh-CG roll coupling.
-                    # - Transonic/supersonic high-q (q >= 11.0 kPa, z ~ 8..25 km): 4.5 deg cap
-                    #   suppresses q*alpha^2 roll torque in jet-shear/Dryden & fin-jam glide.
+                    # Smooth slosh-safe aerodynamic AoA envelope (v2):
+                    # - Low-q terminal glide (q <= 3.5 kPa): 11.5 deg for post-blackout closure.
+                    # - Mid-q subsonic glide (q ~ 7.5..9.0 kPa, z ~ 3..6 km): 6.0 deg cap eliminates
+                    #   the 9 kPa cliff and cuts q*alpha^2 dual-tank slosh-CG roll torque by >60%.
+                    # - High-q transonic/supersonic (q >= 11.5 kPa): 4.5 deg cap.
                     q_cap = min(
                         hi_z_cap,
-                        s.glide_max_alpha_deg
-                        - 6.5 * _smoothstep((q_pa - 3_500.0) / 5_500.0)
-                        - 5.0 * _smoothstep((q_pa - 9_000.0) / 2_000.0),
+                        11.5
+                        - 5.5 * _smoothstep((q_pa - 3_500.0) / 4_500.0)
+                        - 1.5 * _smoothstep((q_pa - 8_000.0) / 3_500.0),
                     )
                 else:
                     q_cap = min(
@@ -2678,7 +2682,7 @@ class RtlsController3D:
                     raw_a_xy[:] = 0.0
 
                 tau_gl_a = (
-                    0.55 if has_fj_gl else (0.50 if self.gnc_v2.use_structural_filter else 0.35)
+                    0.55 if has_fj_gl else (0.65 if self.gnc_v2.use_structural_filter else 0.35)
                 )
                 self._glide_alpha_xy_deg += (1.0 - exp(-s.control_dt_s / tau_gl_a)) * (
                     raw_a_xy - self._glide_alpha_xy_deg
