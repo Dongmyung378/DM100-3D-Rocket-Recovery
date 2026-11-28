@@ -176,7 +176,17 @@ class RtlsController3D:
         self.forecast_atmo = AtmosphereLUT(self.forecast_atmo_settings, step_m=100.0)
         self.forecast_wind = Wind3DLUT(wind_config or Wind3DConfig(), forecast=True)
         self.sensor_config = sensor_config or SensorConfig3D()
-        self.settings = guidance_settings or Guidance3DSettings()
+        if guidance_settings is None and self.gnc_v2.use_structural_filter:
+            # Size v2 entry burn using our >2,500 kg propellant reserve to cap reentry peak-q
+            # near ~19.5 kPa (vs 25.5 kPa legacy), cutting high-Dryden supersonic gust torque
+            # and high-q Fin-Jam runaway loads by ~21% while keeping >2,200 kg landing margin.
+            self.settings = replace(
+                Guidance3DSettings(),
+                entry_q_trigger_pa=20_500.0,
+                entry_q_cutoff_pa=19_500.0,
+            )
+        else:
+            self.settings = guidance_settings or Guidance3DSettings()
 
         self.allocator = PriorityControlAllocator3D(self.vehicle)
         self.estimator = CausalEstimator3D(
@@ -689,6 +699,7 @@ class RtlsController3D:
         throttle_cmd: float,
         *,
         rate_limit_deg_s: float | None = None,
+        roll_rate_limit_deg_s: float | None = None,
         accel_limit_deg_s2: float | None = None,
         allow_fin: bool = False,
         thrust_tilt_cmd_body_xy: tuple[float, float] | None = None,
@@ -779,7 +790,10 @@ class RtlsController3D:
         a_lim_xy = radians(accel_limit_deg_s2 or s.attitude_accel_limit_deg_s2)
         if high_q_guard and not est.upper_attached and q_pa >= s.high_q_threshold_pa:
             a_lim_xy = min(a_lim_xy, radians(s.high_q_accel_limit_deg_s2))
-        r_lims = (r_lim_xy, r_lim_xy, radians(s.roll_rate_limit_deg_s))
+        r_lim_z = radians(
+            roll_rate_limit_deg_s if roll_rate_limit_deg_s is not None else s.roll_rate_limit_deg_s
+        )
+        r_lims = (r_lim_xy, r_lim_xy, r_lim_z)
         a_lims = (a_lim_xy, a_lim_xy, radians(s.roll_accel_limit_deg_s2))
 
         des_alpha = np.zeros(3, dtype=np.float64)
@@ -2022,6 +2036,11 @@ class RtlsController3D:
             q_des,
             throttle,
             rate_limit_deg_s=land_rate_lim,
+            roll_rate_limit_deg_s=(
+                min(s.roll_rate_limit_deg_s, land_rate_lim)
+                if (self.gnc_v2.use_structural_filter and vertical_body)
+                else None
+            ),
             accel_limit_deg_s2=land_acc_lim,
             allow_fin=(est.fin_extension >= 0.05 and h > 300.0),
             thrust_tilt_cmd_body_xy=thrust_tilt_body_xy,

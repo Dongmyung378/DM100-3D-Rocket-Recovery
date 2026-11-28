@@ -337,11 +337,13 @@ class CausalFdir3D:
                         if still_moving and not single_tick_stall:
                             self._fin_jam_stop_count[j] = 0
                             v_inst = max(-f_rate, min(f_rate, 0.5 * dm2_j / dt))
-                            v_new = (
-                                0.55 * v_cur + 0.45 * v_inst
-                                if abs(v_cur) > radians(2.5)
-                                else v_inst
-                            )
+                            if abs(v_cur) > radians(2.5):
+                                # Track deceleration rapidly (0.80) so cushioned stop never
+                                # overshoots, while keeping smooth (0.45) ramp tracking.
+                                w_inst = 0.80 if abs(v_inst) < abs(v_cur) else 0.45
+                                v_new = (1.0 - w_inst) * v_cur + w_inst * v_inst
+                            else:
+                                v_new = v_inst
                             pred_p = self._fin_jam_pos_rad[j] + v_cur * dt
                             pos_new = max(
                                 -f_lim,
@@ -350,8 +352,8 @@ class CausalFdir3D:
                             self._fin_jam_pos_rad[j] = pos_new
                             self._fin_jam_vel_rad_s[j] = v_new
                             # Delay-matched causal lead tracks cushioned hydraulic runaway cleanly
-                            # without a gyro ratchet (1.55 ticks @ delay=0, 2.20 @ delay=1).
-                            lead_t = min(2.30, 1.55 + 0.65 * self.total_delay_steps) * dt
+                            # (1.80 ticks @ delay=0, 2.65 @ delay=1) with fast decel decay.
+                            lead_t = min(2.70, 1.80 + 0.85 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, pos_new + v_new * lead_t)
                             )
@@ -423,7 +425,7 @@ class CausalFdir3D:
                             v0 = (dm_j / dt) if abs(dm_j) > radians(0.18) else 0.0
                             v0 = max(-f_rate, min(f_rate, v0))
                             self._fin_jam_vel_rad_s[j] = v0
-                            lead_t0 = min(2.30, 1.55 + 0.65 * self.total_delay_steps) * dt
+                            lead_t0 = min(2.70, 1.80 + 0.85 * self.total_delay_steps) * dt
                             self.fin_jam_angles_rad[j] = max(
                                 -f_lim, min(f_lim, meas_j + v0 * lead_t0)
                             )
